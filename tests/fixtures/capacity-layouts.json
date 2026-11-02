@@ -1,0 +1,41 @@
+{
+  "A-R1": {
+    "capacity-derivation.json": {
+      "block_size_tokens": 64,
+      "real_tensor_bytes_per_block": 1074432,
+      "null_reserved_blocks": 1,
+      "physical_shard_bytes": 1077248,
+      "shards_per_token_block": 1,
+      "reserved_shards_excluded": 1024,
+      "derived_l1_gib": 18,
+      "actual_nodes": 17941,
+      "actual_l1_ordinary_tokens": 1082688
+    }
+  },
+  "OFF-R1": {
+    "capacity-derivation.json": {
+      "block_size_tokens": 64,
+      "real_tensor_bytes_per_block": 1074432,
+      "null_reserved_blocks": 1,
+      "physical_shard_bytes": 86016,
+      "shards_per_token_block": 14,
+      "reserved_shards_excluded": 1024,
+      "derived_l1_gib": 19,
+      "actual_nodes": 237177,
+      "actual_l1_ordinary_tokens": 1079552
+    }
+  },
+  "D21-R1": {
+    "capacity-derivation.json": {
+      "block_size_tokens": 64,
+      "real_tensor_bytes_per_block": 1074432,
+      "null_reserved_blocks": 1,
+      "physical_shard_bytes": 1093632,
+      "shards_per_token_block": 1,
+      "reserved_shards_excluded": 1024,
+      "derived_l1_gib": 18,
+      "actual_nodes": 17672,
+      "actual_l1_ordinary_tokens": 1065472
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "aisbench_n40_performance": "aisbench-performance",
+  "aisbench_n40_pipeline": "aisbench-pipeline",
+  "swe_w24_n192_performance": "swe-small-performance",
+  "swe_w24_n3379_performance": "swe-full-performance",
+  "swe_w24_n192_pipeline": "swe-pipeline"
+}

@@ -1,0 +1,5 @@
+{
+  "source": "UCM pipeline instrumentation; original local archive is not distributed",
+  "derived_sha256": "e2279dc7bb69187a5640d987ddd3762e49b5a9030ffc6925e29ecf2add55d6ad",
+  "transformation": "Python request-match observation only; exclude historical CMake/native changes"
+}

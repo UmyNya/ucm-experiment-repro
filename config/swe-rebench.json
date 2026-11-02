@@ -1,0 +1,9 @@
+{
+  "session_pool": 24,
+  "request_limit": 192,
+  "full_request_limit": 3379,
+  "seed": 20260911,
+  "workload_dir": null,
+  "regenerate_for_tokenizer": false,
+  "trajectory_limit": 100
+}

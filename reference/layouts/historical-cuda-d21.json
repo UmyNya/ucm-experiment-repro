@@ -1,0 +1,10 @@
+{
+  "scope": "Historical CUDA GLM-5.2-FP8-14L TP1 only; not validated for Ascend",
+  "source_run": "D21-R1",
+  "block_tokens": 64,
+  "hbm_bytes_per_block": 1074432,
+  "hbm_reserved_blocks": 1,
+  "l1_node_bytes": 1093632,
+  "l1_nodes_per_token_block": 1,
+  "l1_reserved_nodes": 1024
+}

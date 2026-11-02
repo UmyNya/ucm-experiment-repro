@@ -1,0 +1,24 @@
+# Local experiments and source audits may contain requests, paths and credentials.
+/runs/
+/evidence/
+/private/
+/WORK_STATUS.json
+/config/*.local.json
+/.venv/
+/venv/
+/build/
+/dist/
+*.egg-info/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.env
+.env.*
+*.pem
+*.key
+*.nsys-rep
+*.qdrep
+*.sqlite
+*.log

@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "label": "early-hrrn-wait",
+  "build": {
+    "jobs": 2,
+    "cmake_args": [],
+    "wheelhouse": null,
+    "install_dependencies": false,
+    "image_label": "quay.io/ascend/vllm-ascend:v0.30.0-a5"
+  },
+  "paths": {
+    "ucm_repository": "/workspace/ucm",
+    "aisbench_repository": "/workspace/aisbench-ucm-repro",
+    "swe_repository": "/workspace/swe-rebench-ucm-bench",
+    "model": "/models/your-model",
+    "tokenizer": "/models/your-model",
+    "server_python": "python3",
+    "aisbench_python": "python3",
+    "swe_python": "python3",
+    "output_root": "../runs",
+    "l2_root": null
+  },
+  "platform": {
+    "kind": "ascend",
+    "visible_devices": [
+      "0"
+    ]
+  },
+  "capacity": {
+    "calibration_file": null,
+    "hbm": {
+      "mode": "tokens",
+      "tokens": 320000,
+      "bytes": 5372160000,
+      "calculation": {
+        "method": "bytes_per_token",
+        "bytes_per_token": 16788,
+        "basis": "Historical CUDA GLM-5.2-FP8-14L TP1; replace or calibrate for other model/backend/TP"
+      }
+    },
+    "l1": {
+      "mode": "physical",
+      "gib": 19,
+      "tokens": 1128320,
+      "rounding": "at_least",
+      "calculation": {
+        "method": "layout",
+        "node_bytes": 1093632,
+        "nodes_per_block": 1,
+        "reserved_nodes": 1024,
+        "basis": "Historical packed 14-layer Early L1; calibrate target backend"
+      }
+    },
+    "l2": {
+      "gib": 128,
+      "enforcement": "ucm_gc_budget",
+      "filesystem_limit_gib": null
+    }
+  },
+  "load": {
+    "concurrency": 32,
+    "request_rate": 0,
+    "stream": true,
+    "output_tokens": 1
+  },
+  "execution": {
+    "repetitions": 1,
+    "compile_calibration": true,
+    "calibration_repetitions": 1,
+    "startup_timeout_s": 1800,
+    "request_timeout_s": 3600,
+    "benchmark_timeout_s": 14400,
+    "drain_timeout_s": 300,
+    "shutdown_timeout_s": 30,
+    "health_poll_s": 2,
+    "metrics_interval_s": 0.5
+  },
+  "validation": {
+    "require_input_identity": true,
+    "require_exact_capacity": true,
+    "require_cache_drain": true,
+    "reject_compilation_during_measurement": true,
+    "require_profile_attribution": true,
+    "strict_source_clean": true
+  },
+  "profiling": {
+    "instrument_native": true,
+    "backend": "auto",
+    "patch_files": [],
+    "extra_python_paths": [],
+    "worker_extension": null,
+    "nsys": "nsys",
+    "required_stages": [
+      "L2_read",
+      "H2D",
+      "device_compute",
+      "D2H",
+      "L2_write"
+    ],
+    "request_page_size": 8,
+    "output_formats": [
+      "png",
+      "svg",
+      "pdf"
+    ],
+    "keep_raw_trace": true
+  },
+  "profiles": {
+    "aisbench_n40_performance": {
+      "client": "aisbench",
+      "mode": "performance",
+      "max_model_len": 40960
+    },
+    "aisbench_n40_pipeline": {
+      "client": "aisbench",
+      "mode": "pipeline",
+      "max_model_len": 40960
+    },
+    "swe_w24_n192_performance": {
+      "client": "swe",
+      "mode": "performance",
+      "max_model_len": 131072,
+      "subset": "small"
+    },
+    "swe_w24_n3379_performance": {
+      "client": "swe",
+      "mode": "performance",
+      "max_model_len": 131072,
+      "subset": "full"
+    },
+    "swe_w24_n192_pipeline": {
+      "client": "swe",
+      "mode": "pipeline",
+      "max_model_len": 131072,
+      "subset": "small"
+    }
+  },
+  "config_files": {
+    "server": "vllm.json",
+    "ucm": "ucm.json",
+    "aisbench": "aisbench.json",
+    "swe": "swe-rebench.json"
+  }
+}

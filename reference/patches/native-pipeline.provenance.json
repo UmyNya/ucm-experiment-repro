@@ -1,0 +1,5 @@
+{
+  "source": "UCM pipeline instrumentation; original local archive is not distributed",
+  "derived_sha256": "d4fecbf628476fb7fbf50f97174c9b92dfc29efcda479cee6a1d81b64e6d83e1",
+  "transformation": "Store-only instrumentation; keep task/block/layer/read/write/credit events; replace NVTX mark with portable event recorder; exclude historical commit stamping and Python changes"
+}

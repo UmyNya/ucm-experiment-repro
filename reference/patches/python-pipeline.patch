@@ -1,0 +1,31 @@
+--- a/ucm/integration/vllm/early_connector.py
++++ b/ucm/integration/vllm/early_connector.py
+@@ -124,6 +124,9 @@
+         self._early.submit(request)
+ 
+     def get_num_new_matched_tokens(self, request, num_computed_tokens):
++        # Measurement-only request identity and query observations, no decision changes.
++        from pipeline_match_observer import record as record_pipeline_match
++        record_pipeline_match(request, num_computed_tokens, None, False)
+         assert num_computed_tokens % self.block_size == 0
+         job = self._early.probe(request)
+         hbm_only = False
+@@ -160,6 +163,8 @@
+         token = current_lookup.set(context)
+         try:
+             result = super().get_num_new_matched_tokens(request, num_computed_tokens)
++            record_pipeline_match(request, num_computed_tokens, result[0], result[1],
++                                  blocks=job.blocks if job is not None else None)
+             if job is not None:
+                 job.match_calls += 1
+                 job.hbm_tokens, job.external_tokens = num_computed_tokens, result[0]
+--- a/ucm/integration/vllm/ucm_connector.py
++++ b/ucm/integration/vllm/ucm_connector.py
+@@ -1797,6 +1797,7 @@
+                     "UCM all-rank hotness update failed. " f"{type(e).__name__}: {e}"
+                 )
+ 
++    @__import__("pipeline_match_observer").observe_match
+     def get_num_new_matched_tokens(
+         self,
+         request: "Request",

@@ -1,0 +1,71 @@
+"""Validate actual worker capacity and create identity-bound calibration files."""
+import math
+
+from common import utc
+
+
+def validate_workers(plan, rows, *, enforce_targets=True):
+    c, expected = plan['configuration'], plan['capacity']
+    count = math.prod(c['server'][k] for k in ['tensor_parallel_size', 'pipeline_parallel_size', 'data_parallel_size'])
+    errors = []
+    if len(rows) != count or len({r['pid'] for r in rows}) != count:
+        errors.append(f'Expected {count} unique workers, observed {len(rows)}')
+    workers = []
+    domains = {}
+    for row in rows:
+        layout = row['capacity_layout']
+        for key in ['block_tokens', 'hbm_bytes_per_block', 'l1_node_bytes', 'l1_nodes_per_token_block']:
+            if type(layout[key]) is not int or layout[key] <= 0:
+                raise ValueError(f'Invalid observed {key}')
+        for key in ['hbm_reserved_blocks', 'l1_reserved_nodes']:
+            if type(layout[key]) is not int or layout[key] < 0:
+                raise ValueError(f'Invalid observed {key}')
+        if layout['block_tokens'] != c['server']['block_size']:
+            errors.append('Observed token block size differs from config')
+        expected_platform = 'cuda' if c['platform']['kind'] == 'cuda' else 'npu'
+        if row['platform'] != expected_platform:
+            errors.append('Observed device backend differs from config')
+        block = layout['block_tokens']
+        hbm = row['hbm_blocks'] * block
+        l1 = (row['l1_nodes'] - layout['l1_reserved_nodes']) // layout['l1_nodes_per_token_block'] * block
+        if hbm != row['hbm_tokens'] or l1 != row['l1_ordinary_tokens']:
+            errors.append('Observer capacity values disagree with its layout')
+        if row['kv_tensor_bytes'] != row['hbm_blocks'] * layout['hbm_bytes_per_block']:
+            errors.append('Actual KV tensor bytes disagree with block allocation')
+        if row['hbm_blocks'] > expected['kv_cache_memory_bytes'] // layout['hbm_bytes_per_block']:
+            errors.append('Actual HBM KV allocation exceeds requested physical budget')
+        nodes = expected['cache_buffer_capacity_gb'] * (1 << 30) // layout['l1_node_bytes']
+        if row['l1_nodes'] != nodes:
+            errors.append(f'L1 nodes differ from physical budget: {row["l1_nodes"]} != {nodes}')
+        if enforce_targets:
+            target = expected['hbm_target_tokens']
+            if target is not None and hbm != target:
+                errors.append(f'HBM tokens differ: actual {hbm}, target {target}; calibrate target backend')
+            target = expected['l1_target_tokens']
+            if target is not None:
+                if l1 < target or (c['capacity']['l1']['rounding'] == 'exact' and l1 != target):
+                    errors.append(f'L1 ordinary tokens differ: actual {l1}, target {target}')
+        domain_shape = (layout['l1_node_bytes'], layout['l1_nodes_per_token_block'], row['l1_nodes'])
+        if row['unique_id'] in domains and domains[row['unique_id']] != domain_shape:
+            errors.append('Workers sharing an L1 domain report incompatible layouts')
+        domains[row['unique_id']] = domain_shape
+        workers.append({'pid': row['pid'], 'rank': row['worker_rank'], 'layout': layout,
+                        'hbm_physical_tokens': hbm, 'hbm_allocatable_token_upper_bound':
+                        (row['hbm_blocks'] - layout['hbm_reserved_blocks']) * block,
+                        'kv_tensor_bytes': row['kv_tensor_bytes'], 'l1_ordinary_tokens': l1,
+                        'l1_payload_bytes': row['l1_nodes'] * layout['l1_node_bytes'],
+                        'shared_memory': row['shared_memory'], 'unique_id': row['unique_id']})
+    return {'checked_utc': utc(), 'passed': not errors, 'errors': errors, 'workers': workers,
+            'unique_l1_domains': len(domains), 'enforced_token_targets': enforce_targets,
+            'scope': 'per-worker KV allocation and per-domain L1 payload; not total device/host RSS'}
+
+
+def calibration_record(plan, rows):
+    validation = validate_workers(plan, rows, enforce_targets=False)
+    if not validation['passed']:
+        raise ValueError('Invalid observed capacity: ' + '; '.join(validation['errors']))
+    return {'schema_version': 1, 'created_utc': utc(), 'identity': plan['model_identity'],
+            'workers': [dict(r['capacity_layout'], worker_rank=r['worker_rank'], worker_pid=r['pid'],
+                             unique_id=r['unique_id']) for r in rows],
+            'validation': validation, 'source_run': plan['run_dir'],
+            'basis': 'actual worker KV tensors and native L1 shared-buffer node count'}

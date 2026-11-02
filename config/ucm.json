@@ -1,0 +1,34 @@
+{
+  "enabled": true,
+  "source_ref": "HEAD",
+  "launch": {
+    "use_layerwise": true,
+    "use_request_async_load": false,
+    "enable_early_prefetch": true,
+    "early_prefetch_request_first": false,
+    "early_prefetch_min_submit_reads": 16,
+    "early_prefetch_submit_max_wait_ms": 2,
+    "enable_event_sync": true,
+    "early_owner_max_jobs": 16,
+    "early_owner_max_candidate_blocks": 0,
+    "early_ready_priority": true,
+    "persist_token_threshold": 0,
+    "use_lite": false,
+    "enable_record_traces": false
+  },
+  "store": {
+    "store_pipeline": "Cache|Posix",
+    "io_direct": true,
+    "posix_io_engine": "aio",
+    "posix_write_inflight_limit": 0,
+    "share_buffer_enable": true,
+    "cache_load_exclusive_buffer_number": 1024,
+    "cache_load_backend_only": false,
+    "cache_full_block_load": true,
+    "cache_full_block_l1": true,
+    "cache_full_block_dump": true,
+    "cache_dump_reserved_blocks": 0,
+    "cache_dump_capacity_policy": "wait",
+    "posix_packed_layer_bytes": null
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "source": "auto",
+  "n": 40,
+  "input_tokens": 40000,
+  "prefix_ratio": 0.8992,
+  "seed": 20260911,
+  "shuffle": true,
+  "dataset": null,
+  "warmup_dataset": null,
+  "cache_salt": "natural-formal",
+  "unrelated_cache_salt": "natural-unrelated"
+}
