@@ -12,6 +12,7 @@ from boundaries import rpc
 from capacity_validation import validate_workers
 from common import BUNDLE, http, read_json, save_json, sha256, utc
 from configuration import compile_plan
+from ucm_configuration import store_config
 from prepare_environment import git
 from processes import OwnedProcess, identity, same_process
 from storage import PrivateStorage, file_identity
@@ -42,7 +43,7 @@ def attest_environment(plan, run):
         raise ValueError('Service environment backend/resource-isolation contract differs from configuration')
     if env.get('metrics_snapshot_contract') != 'bundle-cumulative-v1':
         raise ValueError('Rebuild the private UCM environment with the independent cumulative metrics observer')
-    commit = git(c['paths']['ucm_repository'], 'rev-parse', '--verify', '--end-of-options', c['ucm']['source_ref']+'^{commit}')
+    commit = git(c['paths']['ucm_repository'], 'rev-parse', '--verify', '--end-of-options', c['ucm_runtime']['source_ref']+'^{commit}')
     if commit != env['source']['exported_commit']:
         raise ValueError('Selected UCM commit differs from prepared environment; rebuild a new private environment')
     if c['validation']['strict_source_clean'] and git(c['paths']['ucm_repository'], 'status', '--porcelain=v1', '--untracked-files=all'):
@@ -112,6 +113,8 @@ class Service:
         torchair_cache.mkdir(parents=True, exist_ok=True)
         (self.run/'.torchair_cache').symlink_to(torchair_cache.resolve(), target_is_directory=True)
         save_json(self.run/'plan.json', self.plan)
+        # JSON is valid YAML; the suffix is required by vLLM's --config loader.
+        save_json(self.plan['vllm_config_file'], self.plan['vllm_configuration'])
         save_json(self.run/'ucm.json', self.plan['ucm_configuration'])
         save_json(self.run/'resource-namespace.json', {'prefix': self.prefix, 'supervisor': identity(os.getpid())})
 
@@ -131,9 +134,9 @@ class Service:
 
     def start(self):
         c = self.plan['configuration']
-        if not c['ucm']['enabled']:
+        if not c['ucm_runtime']['enabled']:
             raise ValueError('This service entry requires UCM; OFF means synchronous UCM, not disabling the connector')
-        if c['ucm']['store']['store_pipeline'] != 'Cache|Posix':
+        if store_config(c)['store_pipeline'] != 'Cache|Posix':
             raise ValueError('Owned-resource lifecycle currently requires the Cache|Posix store pipeline')
         self.environment = attest_environment(self.plan, self.run)
         # Never attach to or stop a service merely because it occupies this port.

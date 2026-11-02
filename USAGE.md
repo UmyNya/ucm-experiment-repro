@@ -4,19 +4,21 @@
 
 ## 配置文件位置
 
-| 文件 | 修改内容 |
-|---|---|
-| [config/experiment.json](config/experiment.json) | paths 中的仓库/模型/tokenizer/Python/输出/L2 路径；platform 的 cuda/ascend、visible_devices；**capacity 中的 HBM/L1/L2 容量**；公共 load 与 execution |
-| [config/vllm.json](config/vllm.json) | TP/PP/DP、HF overrides、最大上下文、max_num_seqs、batch tokens、block size、KV dtype、vLLM 参数和环境变量 |
-| [config/ucm.json](config/ucm.json) | UCM source_ref；launch 与 store；async/layerwise/Early、HRRN、READY、owner 数、wait/spill、预留节点、packed layout |
-| [config/aisbench.json](config/aisbench.json) | n、input_tokens、prefix_ratio、seed、shuffle、正式/预热 dataset、cache salt |
-| [config/swe-rebench.json](config/swe-rebench.json) | session_pool=W24/W32、request_limit=192、full_request_limit=3379、seed、workload_dir、换 tokenizer 时 regenerate_for_tokenizer |
+| 文件 | 修改内容 | 逐字段说明 |
+|---|---|---|
+| [config/experiment.json](config/experiment.json) | 容器路径、平台、设备、HBM/L1/L2 容量、公共负载、实验流程、采集与构建 | [主配置参数参考](#主配置参数参考) |
+| [config/vllm.json](config/vllm.json) | vLLM 原生服务参数、模型覆盖、TP/PP/DP、调度与 KV cache | [vLLM 参数参考](#vllmjson-参数参考) |
+| [config/vllm-env.json](config/vllm-env.json) | 公共、CUDA、Ascend 服务环境变量 | [服务环境变量](#vllm-envjson-参数参考) |
+| [config/ucm.json](config/ucm.json) | 原生 connector、Early/HRRN/READY、整块缓存、wait/spill、POSIX I/O | [UCM 参数参考](#ucmjson-参数参考) |
+| [config/aisbench.json](config/aisbench.json) | 输入来源、N、长度、前缀比例、顺序、预热数据、缓存 salt | [AISBench 参数参考](#aisbenchjson-参数参考) |
+| [config/swe-rebench.json](config/swe-rebench.json) | W、正式请求数、seed、workload 来源、tokenizer 重生成、轨迹数 | [SWE 参数参考](#swe-rebenchjson-参数参考) |
+| [config/history-sources.example.json](config/history-sources.example.json) | 可选历史审计的目录映射，不参与新实验配置 | [历史材料映射](#history-sourcesexamplejson-参数参考) |
 
-主配置 `config_files` 引用四个组件配置，可以改为其他路径；同一 section 不允许同时内联和外部引用。相对数据路径按所属配置文件目录解释，公共 paths 按主配置目录解释。读取主配置的运行入口支持 `--config` 和 `--set dotted.key=JSON值`；覆盖只对该次运行生效，不改写文件。每次运行封存原始配置、哈希、合并后实际值和执行脚本。辅助工具的参数见各脚本的 `--help`。
+主配置 `config_files` 引用组件参数及服务环境变量文件，可以改为其他路径；同一 section 不允许同时内联和外部引用。相对数据路径按所属配置文件目录解释，公共 paths 按主配置目录解释。读取主配置的运行入口支持 `--config` 和 `--set dotted.key=JSON值`；覆盖只对该次运行生效，不改写文件。每次运行封存原始配置、哈希、合并后实际值和执行脚本。辅助工具的参数见各脚本的 `--help`。
 
 `load.concurrency` 是客户端并发，`swe.session_pool` 是活跃轨迹池，`server.max_num_seqs` 是引擎序列上限。三者分别配置，不相互替代。profile 的名字只是模板名，W32 或其他请求数以实际配置为准。
 
-首次配置主要修改 `paths`、`platform`、`capacity`、`load` 和 `execution.repetitions`，并同步检查组件文件中的模型、并行数和 UCM 策略。全部字段的默认值、单位与生效条件见 [主配置参数参考](#主配置参数参考)。
+首次配置主要修改 `paths`、`platform`、`capacity`、`load` 和 `execution.repetitions`，并同步检查组件文件中的模型、并行数和 UCM 策略。各文件的字段、示例默认值、单位与生效条件见上表链接。组件 JSON 的顶层不再包一层 `server` / `ucm` / `aisbench` / `swe`；这些前缀用于合并配置和 `--set`，例如在 vllm.json 中写 `tensor_parallel_size`，命令行使用 `--set server.tensor_parallel_size=2`。
 
 ## 选择运行方式
 
@@ -243,6 +245,8 @@ python3 -B -m unittest discover -s tests -v
 
 离线验证覆盖配置解析、输入哈希、普通目录清理、进程身份检查及 CPU 模拟请求流程。示例镜像 vLLM-Ascend v0.30.0-a5 与参考 UCM 版本的组合尚未完成实机启动验证；该 UCM 的版本专用 patch 列表未列 v0.30.0，是否需要适配须依据构建和启动结果判断。逐项验证范围见 [ACCEPTANCE.md](ACCEPTANCE.md)。
 
+离线源码适配测试可以通过 `UCM_SOURCE_ROOT` 指定参考 UCM 仓库；不设置时使用主配置的 `paths.ucm_repository`。这只选择测试读取的源码，不修改实验配置或原始仓库。具体命令和依赖见 [验证说明](ACCEPTANCE.md)。
+
 ## 主配置参数参考
 
 `config/experiment.json` 管理运行环境、公共容量和实验流程，组件的具体行为由 `config_files` 引用的文件管理。下面的默认值对应随包提供的示例配置。JSON 不支持注释；说明集中保存在本节。
@@ -254,11 +258,21 @@ python3 -B -m unittest discover -s tests -v
 | `schema_version` | `1` | 本脚本包的配置格式版本；保持为 `1`。不是 vLLM 或 UCM 的版本。 |
 | `label` | `early-hrrn-wait` | 实验标签，用于结果标识。名称不会启用 HRRN、wait 或其他策略，策略由 UCM 配置决定。 |
 | `config_files.server` | `vllm.json` | vLLM 参数文件，包括 TP/PP/DP、序列上限、block size、模型 overrides 等。 |
-| `config_files.ucm` | `ucm.json` | UCM 源码引用、Early/READY、wait/spill、packed 布局等参数。 |
+| `config_files.server_env` | `vllm-env.json` | 服务环境变量文件；读取后合并到 `server.environment` 与 `server.platform_environment`，也支持不引用此文件。 |
+| `config_files.ucm` | `ucm.json` | 原生 UCM 顶层参数、connector 列表与存储配置。 |
 | `config_files.aisbench` | `aisbench.json` | AISBench 请求数、输入长度、前缀比例和数据来源。 |
 | `config_files.swe` | `swe-rebench.json` | SWE 轨迹池、N192/N3379 请求数、输入来源等参数。 |
 
-组件文件路径相对于主配置所在目录。组件字段使用合并后的名字覆盖，例如 `--set server.tensor_parallel_size=2`。UCM 提交由 `ucm.source_ref` 决定；默认 `HEAD` 会随源码仓库变化，需要固定实验版本时应填写提交哈希。
+组件文件路径相对于主配置所在目录。组件字段使用合并后的名字覆盖，例如 `--set server.tensor_parallel_size=2`。UCM 提交由 `ucm_runtime.source_ref` 决定；默认 `HEAD` 会随源码仓库变化，需要固定实验版本时应填写提交哈希。
+
+### ucm_runtime：实验脚本的 UCM 设置
+
+这两个字段放在 `experiment.json`，用于选择构建源码和服务集成方式，不传给 UCM 原生配置。
+
+| 字段 | 示例默认值 | 含义及生效条件 |
+|---|---|---|
+| `ucm_runtime.enabled` | `true` | 控制启动计划是否配置 UCM KV connector。受管服务和完整实验要求 `true`，设置为 `false` 时服务入口会拒绝启动；同步 UCM 对照应关闭 Early 预取，不能通过移除 connector 替代。 |
+| `ucm_runtime.source_ref` | `HEAD` | 从 `paths.ucm_repository` 导出的 Git 提交引用。可填写提交哈希或本地已有的 tag/分支；脚本不自动 fetch 或切换原仓库。固定实验时填写完整提交哈希，更改后重新构建服务环境。 |
 
 ### paths：容器内路径
 
@@ -306,7 +320,7 @@ python3 -B -m unittest discover -s tests -v
 | `capacity.l1.calculation.method` | `layout` | token 模式下，`layout` 使用下列显式布局；`calibration` 使用汇总校准文件中的 worker 布局。 |
 | `capacity.l1.calculation.node_bytes` | `1093632` | `layout` 方法中，每个实际 L1 节点的数据字节数。 |
 | `capacity.l1.calculation.nodes_per_block` | `1` | `layout` 方法中，存放一个完整 token block 所需的 L1 节点数。 |
-| `capacity.l1.calculation.reserved_nodes` | `1024` | `layout` 方法中，从普通缓存区扣除的加载预留节点数。应与 `ucm.store.cache_load_exclusive_buffer_number` 一致；修改换算值不会自动修改 UCM 的预留配置。 |
+| `capacity.l1.calculation.reserved_nodes` | `1024` | `layout` 方法中，从普通缓存区扣除的加载预留节点数。应与 `ucm.ucm_connectors[0].ucm_connector_config.cache_load_exclusive_buffer_number` 一致；修改换算值不会自动修改 UCM 的预留配置。 |
 | `capacity.l1.calculation.basis` | 历史 packed 布局说明 | 布局依据的说明文字，不参与计算，也不会启用 UCM packed 布局。 |
 | `capacity.l2.gib` | `128` | 写入 UCM `posix_capacity_gb` 的缓存/GC 预算，整数 GiB。 |
 | `capacity.l2.enforcement` | `ucm_gc_budget` | 容量约束方式，见下方说明。 |
@@ -415,7 +429,312 @@ HBM 与 L1 可以独立选择模式。默认组合是 **HBM 按 tokens 换算，
 
 这组参数由 `prepare_environment.py` 使用；只有加 `--build` 才实际执行构建和安装。基础容器仍需具备匹配平台的 vLLM、PyTorch 和驱动等环境，参见 [环境说明](ENVIRONMENT.md)。
 
-### 修改后检查生效值
+## vllm.json 参数参考
+
+[config/vllm.json](config/vllm.json) 的顶层字段合并到 `server`。下表使用合并后的字段名，命令行覆盖也使用这些名字，例如 `--set server.max_num_seqs=32`。表中的值是随包示例值；后端支持的参数组合以所选 vLLM / vllm-ascend 版本为准。
+
+### 统一写法与新增参数
+
+`vllm.json` 只保存服务参数，不需要 `args`、`options` 等额外嵌套层。参数名使用 vLLM 原名，将命令行的 `--` 去掉，推荐将连字符写成下划线。例如 `--api-server-count 1` 写成 `"api_server_count": 1`。也兼容 `api-server-count`，但同一参数的两种写法不能同时出现。新增原生参数无需修改脚本白名单。
+
+下面是可以合并到 `vllm.json` 的 Ascend 参数片段，用于说明写法，不是完整配置，也不代表默认启用或适用于所有模型：
+
+```json
+{
+  "api_server_count": 1,
+  "quantization": "ascend",
+  "trust_remote_code": true,
+  "enable_auto_tool_choice": true,
+  "tool_call_parser": "glm47",
+  "reasoning_parser": "glm47",
+  "kv_cache_dtype": "fp8",
+  "attention_config": {
+    "indexer_kv_dtype": "fp8"
+  },
+  "additional_config": {
+    "enable_flashcomm1": true,
+    "enable_cpu_binding": true,
+    "multistream_overlap_shared_expert": true,
+    "enable_dsa_cp": true
+  }
+}
+```
+
+JSON 参数直接写对象，不需要再转义成字符串；内部字段名保持目标引擎要求的写法。`--attention_config.indexer_kv_dtype fp8` 对应上面的嵌套对象。数组直接写 JSON 数组。新增可选顶层参数设为 `null` 表示不传给引擎，使用引擎默认值；`max_model_len: null` 则使用选中 profile 的上下文长度。已有的并行数、容量相关字段及布尔字段仍按下表要求检查类型，需保留。数组及对象由 vLLM 原生配置加载器处理；空数组遵循原生“不追加参数”的行为。
+
+布尔开关使用 `true` / `false`。`true` 生成原生正向开关，`false` 显式生成 `--no-参数名`，避免某些 vLLM 版本通过 `--config` 加载时忽略 `false`。目标版本必须支持该负向开关；只有正向开关、默认关闭的选项，可删除该字段或设为 `null` 以使用默认值。未知参数、拼写错误以及不支持的开关由目标 vLLM 在启动时报告，离线 `plan.py` 不等于目标引擎兼容性检查。
+
+临时覆盖同样支持新增参数和嵌套字段：
+
+```bash
+python3 -B scripts/plan.py --profile swe_w24_n3379_performance \
+  --set 'server.api_server_count=1' \
+  --set 'server.attention_config.indexer_kv_dtype="fp8"' \
+  --set 'server.additional_config={"enable_flashcomm1":true,"enable_cpu_binding":true}'
+```
+
+以下参数已由公共配置管理，不在 `vllm.json` 中重复填写；重复定义会报错：
+
+| vLLM 参数或设置 | 配置位置 |
+|---|---|
+| `model` / 命令行模型目录 | `experiment.json` → `paths.model` |
+| `kv_cache_memory_bytes` | `experiment.json` → `capacity.hbm`；`auto` 时不传显式字节预算 |
+| `kv_transfer_config` | `ucm.json` 与公共容量配置共同生成 |
+| `worker_extension_cls` | `experiment.json` → `profiling.worker_extension` |
+| `config` | `experiment.json` → `config_files.server`；脚本生成最终 vLLM 配置 |
+| `CUDA_VISIBLE_DEVICES` / `ASCEND_RT_VISIBLE_DEVICES` | `experiment.json` → `platform.visible_devices` |
+
+每次服务目录中保存 `vllm-effective.yaml`，其中包含最终模型路径、容量、UCM connector、observer 和该次上下文长度。文件采用 JSON 语法（同时是有效 YAML），由所选 `paths.server_python` 执行 `-m vllm.entrypoints.cli.main serve 模型目录 --config 本次目录/vllm-effective.yaml`。这与 `vllm serve` 使用同一个 CLI 入口，支持 `api_server_count` 等服务参数。`plan.json` 同时记录 `vllm_configuration`、`vllm_config_file`、`server_command` 和 `server_environment`。`plan.py` 仅展示内容，不创建示意路径 `PLAN_ONLY` 下的配置文件；实际服务启动时才写入该次运行目录。
+
+原有内联 `server`、旧版 `vllm.json` 中的 `environment` / `platform_environment` / `extra_args` 仍可读取。新配置使用独立环境变量文件和直接的原生字段；`extra_args` 仅兼容旧的长选项 argv 数组，不允许覆盖已有原生字段或公共配置生成的参数，也不允许短选项别名。同一环境变量字典不能同时放在两个文件中。新增加的引擎参数参与实验分组和容量校准身份检查，更改后不能直接复用旧的布局校准文件。
+
+### 服务地址与模型设置
+
+| 字段 | 示例默认值 | 含义及生效条件 |
+|---|---|---|
+| `server.host` | `127.0.0.1` | 服务监听地址。配置校验允许 `127.0.0.1`、`localhost`、`0.0.0.0`；后者监听容器内所有 IPv4 接口。本包受管服务的客户端地址仍使用回环地址和下方端口。 |
+| `server.port` | `18290` | HTTP 服务端口，整数 1–65535。与机器上已有服务避免冲突。 |
+| `server.served_model_name` | `glm52-mixed` | API 对外暴露的模型名称，也是客户端请求中的 `model` 值。权重目录由 `paths.model` 指定。 |
+| `server.seed` | `20260911` | vLLM 引擎启动的随机种子。AISBench 请求还会单独携带 `aisbench.seed`；SWE 的 `swe.seed` 用于负载交错顺序。 |
+| `server.hf_overrides` | 下列两个模型字段 | 传给 `--hf-overrides` 的 Hugging Face 模型配置覆盖对象。换模型时检查这些字段是否适用；使用模型原始配置时可设为 `{}`。 |
+| `server.hf_overrides.num_hidden_layers` | `14` | 覆盖模型隐藏层数。此值来自历史 14 层实验，不会自动裁剪或转换模型权重。 |
+| `server.hf_overrides.num_nextn_predict_layers` | `0` | 历史 GLM 模型的 next-token prediction / MTP 层数覆盖，示例用 0 关闭这部分。该字段是否被识别取决于模型实现。 |
+| `server.max_model_len` | `null` | 服务最大上下文长度，单位 tokens，需覆盖输入和输出。`null` 时使用选中 profile 的 `max_model_len`；填写正整数时覆盖所有 profile 的模板值。它不改变客户端输入长度。 |
+
+### 并行、调度与 KV cache
+
+| 字段 | 示例默认值 | 含义及生效条件 |
+|---|---|---|
+| `server.tensor_parallel_size` | `1` | 张量并行度 TP；模型张量在多个设备间分片。改变 TP 后需重新核对 KV 布局和容量换算。 |
+| `server.data_parallel_size` | `1` | 数据并行度 DP；多个模型副本处理请求。它不等于客户端并发。 |
+| `server.pipeline_parallel_size` | `1` | 流水线并行度 PP；模型层分配到多个阶段。可见设备数至少为 TP × PP × DP，且 UCM connector 必须支持所选组合。 |
+| `server.max_num_seqs` | `16` | 引擎每轮调度允许的最大序列数。它与 `load.concurrency`、`swe.session_pool` 分别配置。 |
+| `server.max_num_batched_tokens` | `8192` | 单次调度迭代的 token 预算，覆盖当轮 prefill/decode 工作；不是单条请求长度或整个实验 token 总数。 |
+| `server.block_size` | `64` | vLLM KV block 的 token 数，也用于本包 HBM 对齐和 AISBench 前缀按 block 取整。修改后需重新测量布局，检查后端和模型支持。 |
+| `server.gpu_memory_utilization` | `0.92` | 引擎实例的设备显存使用比例，本包校验范围为 `(0,1]`。是否用于自动规划 KV 容量取决于最终命令是否指定 `--kv-cache-memory-bytes`；显式 KV 字节预算优先。字段名在 Ascend 配置中也保持不变。 |
+| `server.kv_cache_dtype` | `auto` | KV cache 数据类型；`auto` 由引擎按模型及后端选择。其他取值须为目标引擎支持的类型，改变后需重新核对每 token/block 的字节数。 |
+| `server.enable_prefix_caching` | `true` | 启用 vLLM 的前缀 KV 复用。此开关与 UCM Early 预取开关分别控制。 |
+| `server.enable_chunked_prefill` | `true` | 允许长输入的 prefill 按调度预算分块执行，影响计算与加载的交错。 |
+| `server.enable_expert_parallel` | `true` | 对支持的 MoE 模型启用专家并行相关路径；效果依赖模型、后端及 TP/DP 布局。它不是另一个设备数量字段。 |
+| `server.enforce_eager` | `false` | `true` 强制 eager 执行；`false` 允许引擎使用其图执行路径，具体取决于版本和配置。完整实验仍单独审计正式窗口的编译行为。 |
+| `server.async_scheduling` | `false` | 引擎异步调度开关。它不等于 UCM 的 `use_request_async_load`，也不控制客户端异步 HTTP 并发。 |
+
+模型目录和客户端 tokenizer 分别在 `experiment.json` 的 `paths.model`、`paths.tokenizer` 中配置。默认未设置服务的 `tokenizer` 参数，服务从模型目录加载 tokenizer；如果在 `vllm.json` 中显式添加 `tokenizer`，也需同步检查客户端的 `paths.tokenizer`，保证分词行为匹配。新增原生字段中的文件路径按 vLLM 自身语义处理；本包的服务工作目录是本次运行目录，建议这些路径填写容器内绝对路径。
+
+## vllm-env.json 参数参考
+
+[config/vllm-env.json](config/vllm-env.json) 保存服务进程环境，通过 `config_files.server_env` 引用。文件顶层使用 `environment`、`platform_environment`，不包一层 `server`；读取后合并到以下字段，命令行覆盖仍使用 `server.` 前缀。
+
+| 字段 | 示例默认值 | 含义及生效条件 |
+|---|---|---|
+| `server.environment` | `{"ENABLE_UCM_PATCH":"1"}` | 所有平台共用的服务环境变量字典，值必须是字符串。 |
+| `server.environment.ENABLE_UCM_PATCH` | `"1"` | 启用所选 UCM 源码提供的 vLLM 集成补丁；不代表自动安装 vLLM，也不同于本包构建阶段的 profiling 补丁。支持的引擎版本由 UCM 实现决定。 |
+| `server.platform_environment` | `cuda`、`ascend` 两个字典 | 只应用 `platform.kind` 对应的平台条目。同名键覆盖 `server.environment` 中的值。 |
+| `server.platform_environment.cuda.GLM51_LAYERWISE_SYNC_FIX` | `"1"` | CUDA 历史 GLM layerwise 同步适配开关，由所选 UCM 补丁代码读取；换模型或 UCM 版本需核对适用性。 |
+| `server.platform_environment.ascend` | `{}` | Ascend 专属环境变量，默认没有额外条目，可按目标后端补充。 |
+
+继承进程环境后，本包依次应用公共变量、所选平台变量及受管变量。设备可见性、离线模型访问、运行目录、编译缓存和 UCM 配置路径等受管变量由脚本最后设置，应修改相应结构化配置。不要在会被快照保存的环境变量字典中填写凭据。
+
+例如，将以下内容合并到文件中现有的 `platform_environment.ascend` 对象，环境变量值均写成字符串：
+
+```json
+{
+  "HCCL_OP_EXPANSION_MODE": "AIV",
+  "HCCL_BUFFSIZE": "400",
+  "PYTORCH_NPU_ALLOC_CONF": "expandable_segments:True",
+  "TASK_QUEUE_ENABLE": "1",
+  "VLLM_ASCEND_ENABLE_FLASHCOMM1": "1",
+  "VLLM_ASCEND_ENABLE_PREFETCH_MLP": "1"
+}
+```
+
+这些只是可选写法示例，默认 Ascend 环境字典仍为 `{}`。8 卡可见性在主配置中设置 `platform.visible_devices` 为 `["0","1","2","3","4","5","6","7"]`，并在 `vllm.json` 中按实际需要设置 `tensor_parallel_size` 等并行参数。
+
+## ucm.json 参数参考
+
+[config/ucm.json](config/ucm.json) 使用 UCM 原生结构：connector 行为放在顶层，存储参数放在 `ucm_connectors[0].ucm_connector_config`。格式对应 UCM 源码中的 `examples/ucm_config_example.yaml`，由 `ucm/utils.py` 的 `Config` 读取；保留 JSON 文件扩展名，UCM 的 YAML 读取器也能读取该 JSON 语法。
+
+以下是结构示意，已有文件中的其他参数仍保留：
+
+```json
+{
+  "use_layerwise": true,
+  "enable_early_prefetch": true,
+  "ucm_connectors": [
+    {
+      "ucm_connector_name": "UcmPipelineStore",
+      "ucm_connector_config": {
+        "store_pipeline": "Cache|Posix",
+        "io_direct": true,
+        "posix_io_engine": "aio",
+        "cache_dump_capacity_policy": "wait"
+      }
+    }
+  ]
+}
+```
+
+文件不再包含本包自定义的 `launch`、`store`、`enabled`、`source_ref` 包装。启用开关和源码版本在主配置的 `ucm_runtime.enabled`、`ucm_runtime.source_ref` 中设置。默认运行行为保持原有参数值。
+
+| 原生结构字段（合并配置路径） | 内容 |
+|---|---|
+| `ucm.ucm_connectors` | connector 数组。本包的容量、清理和观测协议要求恰好一个 `UcmPipelineStore`，当前使用 `Cache\|Posix` 存储链；原生格式支持传递字段，不表示已适配任意存储后端或多 connector 实验。 |
+| `ucm.ucm_connectors[0].ucm_connector_name` | 默认 `UcmPipelineStore`，对应 UCM 存储工厂中的 connector 名称。 |
+| `ucm.ucm_connectors[0].ucm_connector_config` | L1/L2、I/O 和缓存策略对象，各字段见下面的存储参数表。 |
+
+新增 UCM 参数可直接放在原生位置，无需修改脚本白名单；对象和数组保留类型及嵌套结构，例如目标版本支持的顶层 `metrics_config_path` 或存储配置中的 `store_health` 对象。参数是否生效需以目标 UCM 源码和实际观测为准，离线计划检查不会验证所有原生参数。额外文件路径建议使用容器内绝对路径，因为服务工作目录是本次运行目录。
+
+支持原生配置路径的临时覆盖，数组索引用点号加数字：
+
+```bash
+python3 -B scripts/plan.py --profile swe_w24_n3379_performance \
+  --set 'ucm.enable_early_prefetch=false' \
+  --set 'ucm.ucm_connectors.0.ucm_connector_config.cache_dump_capacity_policy="spill"' \
+  --set 'ucm_runtime.source_ref="HEAD"'
+```
+
+旧版 `launch` / `store` 文件仍可读取，旧的 `--set ucm.launch.字段=值`、`--set ucm.store.字段=值`、`ucm.enabled`、`ucm.source_ref` 也保留为别名。读取后统一转换为原生结构；一个文件不能混用新旧结构，`enabled` / `source_ref` 不能同时定义在旧 UCM 文件与主配置中。
+
+### 顶层参数：connector 与 Early 预取
+
+下列范围和兼容条件按本包参考 UCM 实现说明；更换源码提交后应核对对应实现。Early 表示提前准备外部 KV；owner 表示负责某批预取任务的 worker；READY 表示预取达到可交付状态；HRRN 是结合等待时间与剩余工作量的请求优先级策略。
+
+| 字段 | 示例默认值 | 含义及生效条件 |
+|---|---|---|
+| `ucm.use_layerwise` | `true` | 使用逐层 KV 加载/保存 connector；`false` 选择对应的 direct 路径。与模型、PP 及存储布局共同决定实际 connector。 |
+| `ucm.use_request_async_load` | `false` | 请求级异步外部 KV 加载。参考实现只对原生 `UCMDirectConnector` / `EarlyDirectConnector` 生效，在 layerwise 等路径会关闭并给出日志。 |
+| `ucm.enable_early_prefetch` | `true` | 启用 Early connector，提前准备将被消费的外部 KV。参考实现适用于原生 direct/layerwise 路径，不能假定混合注意力等 connector 支持同一流程。 |
+| `ucm.early_prefetch_request_first` | `false` | `false` 使用参考实现的 HRRN 请求轮次选择；`true` 优先让最早的可提交请求继续发起读取，再使用剩余 I/O 窗口处理后续请求。 |
+| `ucm.early_prefetch_min_submit_reads` | `16` | Early 读取窗口补充时希望积累的读操作数量，整数 1–64。与实际可用窗口共同决定提交门槛；不是 HTTP 并发、卡数或每次必定提交的读取数。 |
+| `ucm.early_prefetch_submit_max_wait_ms` | `2` | 为等待上述读取窗口积累而允许的最长等待，单位毫秒，范围 `(0,10]`。它不是单次磁盘 I/O 或请求的完成超时。 |
+| `ucm.enable_event_sync` | `true` | 使用设备事件协调 KV 拷贝与计算的依赖。改变它会改变同步行为，不能当作独立的日志或 profiling 开关。 |
+| `ucm.early_owner_max_jobs` | `16` | 每个可用 owner 的在途任务数上限，正整数；不等于 worker 数。只有 owner 能力握手成功的路径才应用该额度。 |
+| `ucm.early_owner_max_candidate_blocks` | `0` | 每个 owner 的候选块工作量额度。`0` 按 `max_jobs × 单任务最大块范围` 推导上限；不是无限内存，也不预先为所有候选块分配 L1。正数指定显式块数额度。 |
+| `ucm.early_ready_priority` | `true` | 在服务等待队列准入时优先考虑已 READY 的 Early 请求，同时保留有界绕过/等待保护。它改变调度优先级，不会绕过 HBM 容量检查。 |
+| `ucm.persist_token_threshold` | `0` | UCM 请求长度阈值，单位 tokens。参考原生 connector 对低于阈值的请求跳过相应持久化/命中流程；默认 0 不因该阈值排除正长度请求。它不是缓存容量。 |
+| `ucm.use_lite` | `false` | 选择 UCM 的 lite connector。参考实现中 lite 分支优先于普通 Early/layerwise 分支；切换后不能继续假定 Early 策略和观测合同不变。 |
+| `ucm.enable_record_traces` | `false` | 输出 UCM 自身请求长度、block ID 等跟踪日志。不是本包设备 pipeline 采集的总开关，后者由 profile 与 `profiling` 控制。 |
+
+参考 owner 协议需要受支持的 MLA 共享 L1、布局及进程组，PP 等组合可能使该能力不可用。`early_owner_max_jobs=16` 不能独自证明实际启用了 owner；应查看服务启动日志和 worker 观测结果。Early、READY 适配与引擎调度接口相关，填写 JSON 成功不等于新后端/新版本已完成实机兼容验证。
+
+### ucm_connector_config：L1、L2 与读写路径
+
+下表字段相对于 `ucm_connectors[0].ucm_connector_config`；例如文件中写 `"cache_dump_capacity_policy": "wait"`，命令行使用 `--set ucm.ucm_connectors.0.ucm_connector_config.cache_dump_capacity_policy="wait"`。
+
+| 字段 | 示例默认值 | 含义及生效条件 |
+|---|---|---|
+| `store_pipeline` | `Cache\|Posix` | UCM 存储链，使用主存 Cache 层及 POSIX 存储层。本包当前实验协议要求这个组合，其他存储链需先适配容量、观测和清理逻辑。 |
+| `io_direct` | `true` | 使用直接 I/O，相关文件系统及读写地址/长度需满足实现的对齐要求；改变后也会改变 OS 页缓存参与情况。 |
+| `posix_io_engine` | `aio` | POSIX 层的 I/O 实现，示例采用 Linux AIO。需具备对应系统依赖及文件系统支持；替代实现的名称以所选 UCM 版本为准。 |
+| `posix_write_inflight_limit` | `0` | POSIX AIO 在途写操作的额外限制。参考实现允许 0–4096；`0` 关闭这一额外限额，正数要求 `posix_io_engine=aio`，其他原生队列限制仍然存在。 |
+| `share_buffer_enable` | `true` | 启用共享内存形式的 L1 buffer。实际共享范围由模型/并行布局和 native 域身份决定；同一服务可能包含多个独立 L1 域。 |
+| `cache_load_exclusive_buffer_number` | `1024` | 为加载保留的物理 L1 节点数，从普通缓存可用节点中扣除。单位是节点，不是 tokens 或 GiB；节点字节数需由实际布局确定。显式 L1 tokens 换算中的 `reserved_nodes` 应与它一致。 |
+| `cache_load_backend_only` | `false` | `false` 允许加载复用 L1 命中；`true` 让加载绕过已有 L1 命中走后端。在参考实现中与整块 L1 模式不兼容。 |
+| `cache_full_block_load` | `true` | 启用 Early 的整块后端读取路径，要求后端支持 full-block read。这里的整块覆盖一个 token block 的相应 KV 层数据，不是整条请求。 |
+| `cache_full_block_l1` | `true` | L1 以整块布局持有 KV，改变物理节点大小和 tokens/字节换算。要求 `cache_full_block_load=true` 且 `cache_load_backend_only=false`。 |
+| `cache_full_block_dump` | `true` | 启用整块 dump：组织多层 D2H 数据与后端写回。参考路径要求 Early 整块 L1、正常 DMA 及支持整块写的后端。HBM 源数据释放和 L2 物理写入完成是不同阶段。 |
+| `cache_dump_reserved_blocks` | `0` | dump 队列可持有块的额外配额。`0` 取消这个额外配额，但仍需取得真实 L1 槽位；正数限制持有块数。此字段不会额外扩容 L1，也不等于加载预留节点数。 |
+| `cache_dump_capacity_policy` | `wait` | L1/持有配额不足时的 dump 策略。`wait` 等待容量释放；`spill` 允许将已持有的数据提前写回以腾出容量。参考实现只接受这两个值，`wait` 要求 `cache_full_block_dump=true`。 |
+| `posix_packed_layer_bytes` | `null` | `null` 时本包不向生成的存储配置写入该字段。设置数组时，每个元素为对应层在一个磁盘 KV block 中的存储字节数；参考实现要求正整数、4 KiB 对齐，并与实际层数、L1 slice 和张量布局一致。它会改变存储布局，不是任意压缩比例。 |
+
+容量与路径由主配置统一提供：
+
+| 生成的存储字段 | 修改位置 |
+|---|---|
+| `cache_buffer_capacity_gb` | `experiment.json` → `capacity.l1`，支持物理容量或 tokens 换算 |
+| `posix_capacity_gb` | `experiment.json` → `capacity.l2.gib` |
+| `storage_backends` | `experiment.json` → `paths.l2_root`，脚本为每次服务生成独立 L2 子目录 |
+
+`config/ucm.json` 中省略这三个字段，或将其设为 `null`；填写非空值会报错并提示对应公共配置位置，避免重复设置。其他顶层字段和存储对象第一层字段为 `null` 时，不写入实际 UCM 配置；嵌套对象内的值保持原样。
+
+每次服务启动前生成 `本次服务目录/ucm.json`，其中已经填入容量和私有路径。其层级与用户配置相同，可通过 `plan.json` 的 `ucm_configuration` 查看，也会通过 KV connector 的 `UCM_CONFIG_FILE` 交给 UCM。使用原生工具手动启动时，应使用补齐容量与路径的文件；仓库中的模板只定义可复用参数。
+
+默认整块配置是一组相互依赖的开关。改变模型、层数、TP、KV dtype 或 packed 布局后，需重新核对容量；`capacity.l1.calculation.node_bytes` 只参与换算，不会自动配置 packed 层数组。新增参数保持 UCM 原生位置和字段名，具体支持情况由所选源码版本决定。
+
+## aisbench.json 参数参考
+
+[config/aisbench.json](config/aisbench.json) 合并到 `aisbench`。本包使用 AISBench 的 HTTP 性能测量路径；每轮先发送一次无关预热，再串行发送 N 个目标预热请求，最后测量 N 个正式请求。请求数 `n` 只统计正式窗口，不包含预热。
+
+| 字段 | 示例默认值 | 含义及生效条件 |
+|---|---|---|
+| `aisbench.source` | `auto` | 输入来源，可选 `auto`、`frozen`、`synthetic`、`jsonl`，选择规则见下文。 |
+| `aisbench.n` | `40` | 每轮正式请求数，正整数；同时准备 N 个对应的目标预热输入。不是并发数。 |
+| `aisbench.input_tokens` | `40000` | 每条正式输入及目标预热输入的 token 长度。本包沿用客户端的精确长度检查；自定义 JSONL 不会被自动截断或补齐。还需满足输入加 `load.output_tokens` 不超过服务上下文上限。 |
+| `aisbench.prefix_ratio` | `0.8992` | 目标预热输入与对应正式输入的可复用前缀比例，范围 `[0,1)`。目标前缀按 `floor(input_tokens × prefix_ratio / block_size) × block_size` 向下对齐；默认得到 35968 tokens。不是所有 N 条请求之间共享同一前缀的比例。 |
+| `aisbench.seed` | `20260911` | 输入合成及正式请求顺序的随机种子，也传入预热和正式请求的 generation seed。与引擎启动的 `server.seed` 分开配置。 |
+| `aisbench.shuffle` | `true` | 是否打乱正式请求的顺序；目标预热保持输入对的原始顺序。冻结负载先打乱 0–49，再保留索引小于 N 的项；其他负载打乱 0–N−1。 |
+| `aisbench.dataset` | `null` | `source=jsonl` 时必须填写的正式输入 JSONL 路径。每行提供字符串 `question` 或 `prompt`，至少 N 行；读取前 N 行，再按正式顺序配置排列。路径相对本组件配置目录。 |
+| `aisbench.warmup_dataset` | `null` | `source=jsonl` 时本包预热协议需要的配对输入 JSONL，格式与正式输入相同、至少 N 行。第 i 行与正式数据第 i 行配对。其他 source 不使用此路径。 |
+| `aisbench.cache_salt` | `natural-formal` | 目标预热与正式请求共同携带的缓存命名空间 salt；两者保持相同才能按该命名空间复用前缀。设为空字符串或 `null` 时本包不发送 cache_salt，也不会自动清缓存。 |
+| `aisbench.unrelated_cache_salt` | `natural-unrelated` | 无关预热请求使用的 salt，用于与目标预热/正式请求区分。当 `cache_salt` 为空时，本包也不发送这个 salt。 |
+
+`source` 的选择规则：
+
+- `auto`：N ≤ 50、输入 40000 tokens、block size=64、对齐前缀为 35968 tokens，且 tokenizer 与冻结记录匹配时复用冻结输入；不匹配则按当前 tokenizer 合成输入。不会仅因填写 `dataset` 而自动改用 JSONL。
+- `frozen`：强制使用冻结输入；上述参数或 tokenizer 不匹配时报错，不自动切换来源。
+- `synthetic`：使用 AISBench 适配仓库中的语料与当前本地 tokenizer 构造精确长度、前缀关系经过检查的输入；需要该仓库配套的语料文件。
+- `jsonl`：使用 `dataset` / `warmup_dataset`。本包检查实际长度与输入身份，但不会自动修改文本来实现 `prefix_ratio`，也不会仅凭这个配置值证明自定义数据拥有相应前缀比例。
+
+并发、发送速率、流式响应和输出长度分别使用 `experiment.json` 的 `load.concurrency`、`load.request_rate`、`load.stream`、`load.output_tokens`；模型别名与 tokenizer 使用公共服务/路径配置。
+
+## swe-rebench.json 参数参考
+
+[config/swe-rebench.json](config/swe-rebench.json) 合并到 `swe`，控制已有 SWE 轨迹请求的选择、交错和回放。一条轨迹由同一任务的多轮请求组成；回放保留同轨迹的因果依赖，后续请求等待前序响应。这里不会运行软件开发 agent 重新解题。
+
+| 字段 | 示例默认值 | 含义及生效条件 |
+|---|---|---|
+| `swe.session_pool` | `24` | 生成请求交错顺序的活跃轨迹池 W，即 W24。影响轨迹交错和缓存复用间隔，不等于 HTTP 并发。本包直接支持 W24/W32；其他值需提供已准备的 `workload_dir`。 |
+| `swe.request_limit` | `192` | `subset=small` 的每轮正式请求数，取 workload 顺序的前 N 个请求。目前用于小规模性能与 pipeline profile；不含预热。 |
+| `swe.full_request_limit` | `3379` | `subset=full` 的每轮正式请求数，目前用于完整规模性能 profile。它是显式上限配置，不会自动跟随 workload 总数变化，也不与 `request_limit` 相加。 |
+| `swe.seed` | `20260911` | 轨迹交错顺序的随机种子，不是模型采样 seed。使用预先生成的 workload 时，其 manifest 中的 seed 必须与此值一致。 |
+| `swe.workload_dir` | `null` | 已准备的 workload 目录，包含 `manifest.json`、`order.jsonl`、`profiles.jsonl` 及其引用的 token 数据。非 `null` 时优先使用，路径相对本组件配置文件目录；W/seed 必须与配置一致。 |
+| `swe.regenerate_for_tokenizer` | `false` | 在未指定 `workload_dir` 时，使用 `paths.tokenizer` 重新准备历史请求的 token 缓存。换 tokenizer 时应开启；新 token 长度仍须满足上下文限制。显式 workload 不会因此被重新分词。 |
+| `swe.trajectory_limit` | `100` | 生成新 workload 时从冻结轨迹列表取前 N 条，随后按 W/seed 交错；不是随机抽取 N 条，也不是正式请求数。参考源列表共有 100 条，生成时要求 N 在 1–100 且不少于 W。显式 workload 不受此字段重新裁剪。 |
+
+负载来源按以下顺序确定：
+
+1. `workload_dir` 非 `null`：直接使用该目录；`regenerate_for_tokenizer` 和 `trajectory_limit` 不触发重新生成。
+2. 未指定目录，且 `regenerate_for_tokenizer=true`、seed 不是 `20260911` 或 trajectory_limit 不是 `100`：在本次输入目录生成新 workload。只有开启 tokenizer 重生成时才使用新的 tokenizer 重新分词。
+3. 其余情况：使用 SWE 仓库内的 `workloads/W{session_pool}-N3379-seed20260911`。目录名相对 `paths.swe_repository`；所选 W 的材料必须实际存在。
+
+默认配置因此回放 W24 的冻结负载，小规模入口使用前 192 个请求，完整入口使用前 3379 个请求。减少轨迹数后，要同步确认选中 profile 的请求数不超过可用请求数，超出会报错。冻结输入要求原 tokenizer；已准备的 token-cache workload 应由使用者保证与当前服务匹配。
+
+`swe.session_pool` 控制负载交错，`load.concurrency` 限制客户端在途请求数，`server.max_num_seqs` 限制引擎调度序列数，三者分别生效。SWE 协议要求 `load.request_rate=0`、`load.stream=true`；正式请求前的无关预热不计入 N，完整实验的编译校准轮也不计入正式成绩。正式重复轮数由 `execution.repetitions` 控制。
+
+例如，选择小规模 profile 后设置 `swe.request_limit=512`，实际执行前 512 个请求，即使 profile 名称仍含 `n192`。可在执行前只查看计划：
+
+```bash
+python3 -B scripts/plan.py --profile swe_w24_n192_performance \
+  --set swe.session_pool=32 --set swe.request_limit=512 \
+  --set load.concurrency=16
+```
+
+## history-sources.example.json 参数参考
+
+[config/history-sources.example.json](config/history-sources.example.json) 仅供 `scripts/inspect_sources.py --history-map` 使用，不在 `experiment.json` 的 `config_files` 中，不会改变服务、客户端或实验参数。普通新实验无需配置这份映射。
+
+文件是“审计标签 → 历史实验目录”的映射。值相对于 `inspect_sources.py --workspace` 指定的目录解析，不是相对 JSON 文件位置；必须是该 workspace 内的非空相对子目录路径，不能是绝对路径、workspace 本身或越出 workspace 的路径。
+
+| 示例键 | 示例目录值 | 用途 |
+|---|---|---|
+| `aisbench_n40_performance` | `aisbench-performance` | AISBench 性能实验历史材料。 |
+| `aisbench_n40_pipeline` | `aisbench-pipeline` | AISBench pipeline 历史材料。 |
+| `swe_w24_n192_performance` | `swe-small-performance` | SWE 小规模性能实验历史材料。 |
+| `swe_w24_n3379_performance` | `swe-full-performance` | SWE 完整规模性能实验历史材料。 |
+| `swe_w24_n192_pipeline` | `swe-pipeline` | SWE pipeline 历史材料。 |
+
+这些目录名是占位示例，使用时填写真实历史材料所在的相对目录。键作为归档标签，仅允许英文字母、数字、下划线和连字符；可以增加、删除或重命名条目，不要求与 profile 同名。脚本只复制选定报告、配置和结果表，记录来源/哈希及仓库状态；它不会执行历史实验控制脚本，也不会把缺失的材料自动补齐。
+
+```bash
+python3 -B scripts/inspect_sources.py \
+  --workspace /历史材料根目录 --ucm /UCM源码仓库 \
+  --history-map config/history-sources.example.json \
+  --output runs/new-source-audit
+```
+
+`--output` 是将创建的新目录，运行前不应已存在；检查生成的 `manifest.json` 中实际归档的文件清单。加 `--check-remote` 才执行只读远端查询。
+
+## 修改后检查生效值
 
 用 `plan.py` 查看合并配置、启动参数、容量换算与请求数。此命令不启动服务，也不预留设备或运行目录：
 

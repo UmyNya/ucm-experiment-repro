@@ -11,6 +11,7 @@ import re
 
 from capacity import resolve as resolve_layout, GIB, ceildiv
 from common import BUNDLE, json_hash, read_json, safe_output, sha256
+from ucm_configuration import normalize_ucm, apply_ucm_override, store_config, effective_ucm
 
 SECTIONS = {
     "build": "jobs cmake_args wheelhouse install_dependencies image_label",
@@ -18,7 +19,8 @@ SECTIONS = {
     "platform": "kind visible_devices",
     "server": "host port served_model_name seed tensor_parallel_size data_parallel_size pipeline_parallel_size hf_overrides max_model_len max_num_seqs max_num_batched_tokens block_size gpu_memory_utilization kv_cache_dtype enable_prefix_caching enable_chunked_prefill enable_expert_parallel enforce_eager async_scheduling extra_args environment platform_environment",
     "capacity": "calibration_file hbm l1 l2",
-    "ucm": "enabled source_ref launch store",
+    "ucm": "ucm_connectors",
+    "ucm_runtime": "enabled source_ref",
     "load": "concurrency request_rate stream output_tokens",
     "aisbench": "source n input_tokens prefix_ratio seed shuffle dataset warmup_dataset cache_salt unrelated_cache_salt",
     "swe": "session_pool request_limit full_request_limit seed workload_dir regenerate_for_tokenizer trajectory_limit",
@@ -26,6 +28,49 @@ SECTIONS = {
     "validation": "require_input_identity require_exact_capacity require_cache_drain reject_compilation_during_measurement require_profile_attribution strict_source_clean",
     "profiling": "instrument_native backend patch_files extra_python_paths worker_extension nsys required_stages request_page_size output_formats keep_raw_trace",
 }
+
+SERVER_METADATA = {"extra_args", "environment", "platform_environment"}
+MANAGED_SERVER_OPTIONS = {
+    "model": "paths.model", "config": "config_files.server",
+    "kv_cache_memory_bytes": "capacity.hbm",
+    "kv_transfer_config": "ucm", "worker_extension_cls": "profiling.worker_extension",
+}
+
+
+def normalize_server(server):
+    """Keep native option names open; reject aliases that hide conflicting values."""
+    if not isinstance(server, dict):
+        raise ValueError("server must be an object")
+    normalized = {}
+    for key, value in server.items():
+        if not re.fullmatch(r"[a-z][a-z0-9_-]*", key):
+            raise ValueError(f"Invalid vLLM option {key!r}; use a nested object for JSON options")
+        name = key.replace("-", "_")
+        if name in normalized:
+            raise ValueError(f"Duplicate vLLM option alias: {key}")
+        if name in MANAGED_SERVER_OPTIONS:
+            raise ValueError(f"Configure server.{name} through {MANAGED_SERVER_OPTIONS[name]}")
+        if name.startswith("no_"):
+            raise ValueError(f"Use {name[3:]}: false instead of {key}")
+        if name == "api_key":
+            raise ValueError("Do not store credentials in configuration snapshots; use inherited environment")
+        normalized[name] = value
+    normalized.setdefault("extra_args", [])
+    normalized.setdefault("environment", {})
+    normalized.setdefault("platform_environment", {})
+    return normalized
+
+
+def native_server_config(server):
+    """Emit YAML-compatible JSON without depending on PyYAML on the control host.
+
+    Explicit negative switches avoid vLLM versions dropping false values while
+    loading --config on the root CLI parser rather than the serve subparser.
+    Unsupported negative switches fail at engine startup instead of being ignored.
+    """
+    return {("no-" if value is False else "") + key.replace("_", "-"):
+            (True if value is False else value)
+            for key, value in server.items() if key not in SERVER_METADATA and value is not None}
 
 
 def positive(value, name, minimum=1):
@@ -62,17 +107,32 @@ def load(path, overrides=()):
     origins = {name: path.parent for name in SECTIONS}
     sources = [{"section": "main", "path": str(path), "sha256": sha256(path)}]
     references = config.pop("config_files", {})
-    keys(references, "server ucm aisbench swe", "config_files")
+    keys(references, "server server_env ucm aisbench swe", "config_files")
+    server_env = None
     for section, filename in references.items():
         if section in config:
             raise ValueError(f"Define {section} inline or via config_files, never both")
         source = Path(path_value(filename, path.parent))
-        config[section] = read_json(source)
+        if section == "server_env":
+            server_env = read_json(source)
+            keys(server_env, "environment platform_environment", "server_env")
+        else:
+            config[section] = read_json(source)
         origins[section] = source.parent
         sources.append({"section": section, "path": str(source), "sha256": sha256(source)})
     config["configuration_sources"] = sources
+    normalize_ucm(config)
     for section, allowed in SECTIONS.items():
-        keys(config.get(section), allowed, section)
+        if section not in {"server", "ucm"}:
+            keys(config.get(section), allowed, section)
+    if server_env is not None:
+        if not isinstance(config.get("server"), dict):
+            raise ValueError("server must be an object")
+        for name, value in server_env.items():
+            if name in config["server"] or name.replace("_", "-") in config["server"]:
+                raise ValueError(f"Define {name} in vllm.json or vllm-env.json, never both")
+            config["server"][name] = value
+    config["server"] = normalize_server(config.get("server"))
     for override in overrides:
         key, sep, raw = override.partition("=")
         if not sep:
@@ -81,17 +141,24 @@ def load(path, overrides=()):
             value = json.loads(raw)
         except json.JSONDecodeError:
             value = raw
+        if apply_ucm_override(config, key, value):
+            continue
         parts = key.split(".")
+        if len(parts) > 1 and parts[0] == "server":
+            parts[1] = parts[1].replace("-", "_")
         target = config
         for part in parts[:-1]:
+            if parts[0] == "server" and isinstance(target, dict) and part not in target:
+                target[part] = {}
             if not isinstance(target, dict) or part not in target:
                 raise ValueError(f"Unknown override: {key}")
             target = target[part]
-        dynamic = key.startswith(("ucm.launch.", "ucm.store.", "server.environment.",
-                                  "server.hf_overrides.", "server.platform_environment."))
+        dynamic = key.startswith(("server.",))
         if not isinstance(target, dict) or (parts[-1] not in target and not dynamic):
             raise ValueError(f"Unknown override: {key}")
         target[parts[-1]] = value
+    config["server"] = normalize_server(config["server"])
+    normalize_ucm(config)
     base = path.parent
     for key, value in config["paths"].items():
         if key.endswith("_python"):
@@ -141,11 +208,15 @@ def validate(c):
         raise ValueError("gpu_memory_utilization must be in (0,1]")
     if not isinstance(s["extra_args"], list) or any(not isinstance(x, str) for x in s["extra_args"]):
         raise ValueError("server.extra_args must be an argv array, not a shell command")
-    managed = {"model", "host", "port", "served-model-name", "kv-transfer-config", "worker-extension-cls",
-               "hf-overrides", "kv-cache-memory-bytes", "seed"} | {k.replace("_", "-") for k in s}
+    managed = set(MANAGED_SERVER_OPTIONS) | set(s) | {"api_key"}
     for token in s["extra_args"]:
-        if token.startswith("--") and token.split("=", 1)[0][2:] in managed:
-            raise ValueError(f"Set the structured config field instead of duplicate extra_args: {token}")
+        if token.startswith("--"):
+            option = token[2:].split("=", 1)[0].split(".", 1)[0].replace("-", "_")
+            if any(name.startswith(option.removeprefix("no_")) for name in managed):
+                raise ValueError(f"Set the structured config field instead of duplicate extra_args: {token}")
+        elif re.match(r"-[A-Za-z]", token):
+            raise ValueError("Use native fields instead of short aliases in server.extra_args")
+    keys(s["platform_environment"], "cuda ascend", "server.platform_environment")
     for mapping in [s["environment"], *s["platform_environment"].values()]:
         if not isinstance(mapping, dict) or any(not isinstance(v, str) for v in mapping.values()):
             raise ValueError("Configured environment values must be strings")
@@ -155,7 +226,7 @@ def validate(c):
             if re.search(r"PASSWORD|SECRET|API_KEY|ACCESS_TOKEN|AUTHORIZATION", key, re.I):
                 raise ValueError("Do not store credentials in configuration snapshots; use inherited environment")
     for group, names in [("server", "enable_prefix_caching enable_chunked_prefill enable_expert_parallel enforce_eager async_scheduling"),
-                         ("execution", "compile_calibration"), ("load", "stream"), ("ucm", "enabled"),
+                         ("execution", "compile_calibration"), ("load", "stream"), ("ucm_runtime", "enabled"),
                          ("validation", " ".join(c["validation"]))]:
         for name in names.split():
             if type(c[group][name]) is not bool:
@@ -286,21 +357,28 @@ def capacity_plan(c):
 def model_identity(c):
     path = Path(c["paths"]["model"]) / "config.json"
     s = c["server"]
-    return {"model_path": c["paths"]["model"], "model_config_sha256": sha256(path) if path.is_file() else None,
+    result = {"model_path": c["paths"]["model"], "model_config_sha256": sha256(path) if path.is_file() else None,
             "hf_overrides": s["hf_overrides"], "platform": c["platform"]["kind"],
             "tp": s["tensor_parallel_size"], "pp": s["pipeline_parallel_size"], "dp": s["data_parallel_size"],
             "block_size": s["block_size"], "kv_dtype": s["kv_cache_dtype"],
-            "ucm_layout_config": {k: c["ucm"]["store"].get(k) for k in ["cache_full_block_l1", "cache_full_block_load", "posix_packed_layer_bytes", "cache_load_exclusive_buffer_number"]},
-            "use_layerwise": c["ucm"]["launch"].get("use_layerwise")}
+            "ucm_layout_config": {k: store_config(c).get(k) for k in ["cache_full_block_l1", "cache_full_block_load", "posix_packed_layer_bytes", "cache_load_exclusive_buffer_number"]},
+            "use_layerwise": c["ucm"].get("use_layerwise")}
+    extensions = {k: v for k, v in s.items() if k not in SECTIONS["server"].split() and v is not None}
+    if s.get("extra_args"):
+        extensions["extra_args"] = s["extra_args"]
+    if extensions:
+        result["vllm_extensions"] = extensions
+    return result
 
 
 def compile_plan(config, profile, run_dir):
     c = copy.deepcopy(config)
+    normalize_ucm(c)
     if profile not in c["profiles"]:
         raise ValueError(f"Unknown profile: {profile}")
     p = c["profiles"][profile]
     run = Path(run_dir).resolve()
-    s = c["server"]
+    s = c["server"] = normalize_server(c["server"])
     max_len = s["max_model_len"] or p["max_model_len"]
     positive(max_len, "max_model_len")
     if p["client"] == "aisbench" and c["aisbench"]["input_tokens"] + c["load"]["output_tokens"] > max_len:
@@ -310,26 +388,18 @@ def compile_plan(config, profile, run_dir):
     capacity = capacity_plan(c)
     l2_base = Path(c["paths"]["l2_root"]) if c["paths"]["l2_root"] else run / "scratch"
     l2_path = l2_base / ("l2-" + json_hash(str(run))[:20])
-    store = {k: v for k, v in c["ucm"]["store"].items() if v is not None}
-    store.update(storage_backends=str(l2_path), cache_buffer_capacity_gb=capacity["cache_buffer_capacity_gb"],
-                 posix_capacity_gb=capacity["posix_capacity_gb"])
-    ucm = {**c["ucm"]["launch"], "ucm_connectors": [{"ucm_connector_name": "UcmPipelineStore", "ucm_connector_config": store}]}
-    args = [c["paths"]["server_python"], "-B", "-m", "vllm.entrypoints.openai.api_server",
-            "--model", c["paths"]["model"], "--host", s["host"], "--port", str(s["port"]),
-            "--served-model-name", s["served_model_name"], "--max-model-len", str(max_len)]
+    ucm = effective_ucm(c, capacity, l2_path)
+    native = native_server_config(s)
+    native.update(model=c["paths"]["model"])
+    native["max-model-len"] = max_len
     if capacity["kv_cache_memory_bytes"] is not None:
-        args += ["--kv-cache-memory-bytes", str(capacity["kv_cache_memory_bytes"])]
-    for key in ["seed", "tensor_parallel_size", "data_parallel_size", "pipeline_parallel_size",
-                "max_num_seqs", "max_num_batched_tokens", "block_size", "gpu_memory_utilization", "kv_cache_dtype"]:
-        args += ["--" + key.replace("_", "-"), str(s[key])]
-    if s["hf_overrides"]:
-        args += ["--hf-overrides", json.dumps(s["hf_overrides"], separators=(",", ":"))]
-    for key in ["enable_prefix_caching", "enable_chunked_prefill", "enable_expert_parallel", "enforce_eager", "async_scheduling"]:
-        args += ["--" + ("" if s[key] else "no-") + key.replace("_", "-")]
-    if c["ucm"]["enabled"]:
-        args += ["--kv-transfer-config", json.dumps({"kv_connector": "UCMConnector", "kv_connector_module_path": "ucm.integration.vllm.ucm_connector", "kv_role": "kv_both", "engine_id": "bundle-" + json_hash(str(run))[:20], "kv_connector_extra_config": {"UCM_CONFIG_FILE": str(run / "ucm.json")}}, separators=(",", ":"))]
-    args += ["--worker-extension-cls", c["profiling"]["worker_extension"] or "runtime_observer.BundleObserver"]
-    args += s["extra_args"]
+        native["kv-cache-memory-bytes"] = capacity["kv_cache_memory_bytes"]
+    if c["ucm_runtime"]["enabled"]:
+        native["kv-transfer-config"] = {"kv_connector": "UCMConnector", "kv_connector_module_path": "ucm.integration.vllm.ucm_connector", "kv_role": "kv_both", "engine_id": "bundle-" + json_hash(str(run))[:20], "kv_connector_extra_config": {"UCM_CONFIG_FILE": str(run / "ucm.json")}}
+    native["worker-extension-cls"] = c["profiling"]["worker_extension"] or "runtime_observer.BundleObserver"
+    native_path = str(run / "vllm-effective.yaml")
+    args = [c["paths"]["server_python"], "-B", "-m", "vllm.entrypoints.cli.main", "serve",
+            c["paths"]["model"], "--config", native_path, *s["extra_args"]]
     kind = c["platform"]["kind"]
     env = {**s["environment"], **s["platform_environment"].get(kind, {}),
            "VLLM_SERVER_DEV_MODE": "1", "BUNDLE_PLATFORM": kind,
@@ -345,6 +415,7 @@ def compile_plan(config, profile, run_dir):
     return {"schema_version": 1, "profile": profile, "client": p["client"], "mode": p["mode"],
             "label": c["label"], "run_dir": str(run), "configuration": c, "configuration_sha256": json_hash(c),
             "server_command": args, "server_environment": env, "ucm_configuration": ucm,
+            "vllm_configuration": native, "vllm_config_file": native_path,
             "capacity": capacity, "model_identity": model_identity(c), "max_model_len": max_len,
             "request_count": request_count, "base_url": f"http://127.0.0.1:{s['port']}", "l2_path": str(l2_path),
             "profiling_backend": ("nsys" if kind == "cuda" else "torch_npu") if c["profiling"]["backend"] == "auto" else c["profiling"]["backend"],

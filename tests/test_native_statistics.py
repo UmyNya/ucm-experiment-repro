@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import sys
 from types import ModuleType,SimpleNamespace
@@ -13,7 +14,10 @@ from native_statistics import summarize
 
 class NativeStatisticsTest(unittest.TestCase):
     def test_default_disabled_multiproc_and_consumed_connector_do_not_erase_observation(self):
-        source=Path(load(ROOT/'config/experiment.json')['paths']['ucm_repository'])/'ucm/metrics_dispatcher.py'
+        root=os.environ.get('UCM_SOURCE_ROOT') or load(ROOT/'config/experiment.json')['paths']['ucm_repository']
+        source=Path(root)/'ucm/metrics_dispatcher.py'
+        if os.environ.get('UCM_SOURCE_ROOT') and not source.is_file():
+            self.fail('UCM_SOURCE_ROOT does not contain ucm/metrics_dispatcher.py')
         if not source.is_file():self.skipTest('Actual UCM source is required for this adapter test')
         code=adapt_metrics_dispatcher(source.read_text())
         definitions=[SimpleNamespace(name='bytes',metric_type='counter',vllm_connector_enabled=True),

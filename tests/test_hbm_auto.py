@@ -31,9 +31,9 @@ class HbmAutoTest(unittest.TestCase):
             for profile in config['profiles']:
                 with self.subTest(platform=platform, profile=profile):
                     plan = compile_plan(config, profile, ROOT / 'runs/auto-plan')
-                    argv = plan['server_command']
-                    self.assertNotIn('--kv-cache-memory-bytes', argv)
-                    self.assertEqual(argv[argv.index('--gpu-memory-utilization') + 1], '0.8')
+                    native = plan['vllm_configuration']
+                    self.assertNotIn('kv-cache-memory-bytes', native)
+                    self.assertEqual(native['gpu-memory-utilization'], 0.8)
                     self.assertEqual(plan['capacity']['hbm_mode'], 'auto')
                     self.assertIsNone(plan['capacity']['kv_cache_memory_bytes'])
                     self.assertIsNone(plan['capacity']['hbm_target_tokens'])
@@ -44,8 +44,7 @@ class HbmAutoTest(unittest.TestCase):
             config = load(ROOT / 'config/experiment.json', [f'capacity.hbm.mode="{mode}"'])
             config['capacity']['hbm']['bytes'] = 8 * (1 << 30)
             plan = compile_plan(config, 'swe_w24_n3379_performance', ROOT / 'runs/explicit-plan')
-            argv = plan['server_command']
-            self.assertEqual(argv[argv.index('--kv-cache-memory-bytes') + 1], str(value))
+            self.assertEqual(plan['vllm_configuration']['kv-cache-memory-bytes'], value)
 
     def test_invalid_modes_and_utilization_are_rejected(self):
         for override in ['capacity.l1.mode="auto"', 'capacity.hbm.mode="unknown"',

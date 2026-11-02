@@ -115,7 +115,7 @@ def generate(runs, *, include_validation=False, output_root=None, formats=None):
             for raw in [*capture.get('worker_directories',[]),*capture.get('device_traces',[]),capture.get('match_events')]:
                 if raw and Path(raw).exists():
                     lines.append(f'- [采集原始数据：{Path(raw).name}]({relative(raw,report)})')
-        for name in ['plan.json', 'startup-workers.json', 'runtime-inventory.json', 'service-environment.json', 'resource-cleanup.json', 'l2-storage.json']:
+        for name in ['plan.json', 'vllm-effective.yaml', 'startup-workers.json', 'runtime-inventory.json', 'service-environment.json', 'resource-cleanup.json', 'l2-storage.json']:
             file = service/name
             if file.is_file():
                 lines.append(f'- [service/{name}]({relative(file, report)})')

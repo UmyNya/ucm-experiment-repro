@@ -30,7 +30,7 @@ def ais_config(plan):
     c = plan["configuration"]
     config = copy.deepcopy(DEFAULTS)
     config["mode"] = "external"
-    config["experiment"] = {"repetitions": 1, "early_prefetch": [bool(c["ucm"]["launch"].get("enable_early_prefetch"))], "alternate_order": False}
+    config["experiment"] = {"repetitions": 1, "early_prefetch": [bool(c["ucm"].get("enable_early_prefetch"))], "alternate_order": False}
     for key in ["source", "n", "input_tokens", "prefix_ratio", "seed", "shuffle", "dataset", "warmup_dataset"]:
         config["workload"][key] = c["aisbench"][key]
     config["workload"]["output_tokens"] = c["load"]["output_tokens"]

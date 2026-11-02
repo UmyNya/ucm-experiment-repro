@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 
 from common import BUNDLE, new_run, read_json, save_json, json_hash
 from configuration import load, compile_plan
+from ucm_configuration import normalize_ucm
 from processes import OwnedProcess, same_process
 from service import interrupt_cleanup
 
@@ -81,13 +82,21 @@ def main(client=None):
             raise ValueError('Client tokenizer path differs from the attached service; set the intended tokenizer explicitly')
         for name in ['server','ucm','capacity','platform']:
             plan['configuration'][name] = copy.deepcopy(server_plan['configuration'][name])
+        plan['configuration'].pop('ucm_runtime', None)
+        if 'ucm_runtime' in server_plan['configuration']:
+            plan['configuration']['ucm_runtime'] = copy.deepcopy(server_plan['configuration']['ucm_runtime'])
+        normalize_ucm(plan['configuration'])
         plan['configuration']['paths']['model'] = server_plan['configuration']['paths']['model']
         for name in ['capacity','model_identity','max_model_len','ucm_configuration','profiling_backend',
                      'server_command','server_environment','l2_path']:
             plan[name] = copy.deepcopy(server_plan[name])
+        for name in ['vllm_configuration', 'vllm_config_file']:
+            plan.pop(name, None)
+            if name in server_plan:
+                plan[name] = copy.deepcopy(server_plan[name])
         if plan['mode']=='pipeline' and server_plan['mode']!='pipeline':
             raise ValueError('Start serve.py with a pipeline profile before attaching a pipeline client')
-        for name in ['service-environment.json', 'startup-workers.json', 'capacity-validation.json']:
+        for name in ['service-environment.json', 'startup-workers.json', 'capacity-validation.json', 'vllm-effective.yaml']:
             if (service_run/name).is_file():
                 shutil.copyfile(service_run/name, run/name)
         plan['attached_service_run'] = str(service_run)

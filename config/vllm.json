@@ -20,15 +20,5 @@
   "enable_chunked_prefill": true,
   "enable_expert_parallel": true,
   "enforce_eager": false,
-  "async_scheduling": false,
-  "extra_args": [],
-  "environment": {
-    "ENABLE_UCM_PATCH": "1"
-  },
-  "platform_environment": {
-    "cuda": {
-      "GLM51_LAYERWISE_SYNC_FIX": "1"
-    },
-    "ascend": {}
-  }
+  "async_scheduling": false
 }

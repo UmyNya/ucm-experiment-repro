@@ -33,7 +33,7 @@ def export_source(config, run):
     status = git(repo, 'status', '--porcelain=v1', '--untracked-files=all')
     if status and config['validation']['strict_source_clean']:
         raise RuntimeError('UCM worktree is dirty; original files will not be changed or reset')
-    commit = git(repo, 'rev-parse', '--verify', '--end-of-options', config['ucm']['source_ref'] + '^{commit}')
+    commit = git(repo, 'rev-parse', '--verify', '--end-of-options', config['ucm_runtime']['source_ref'] + '^{commit}')
     if not re.fullmatch(r'[0-9a-f]{40,64}', commit):
         raise ValueError('Source ref did not resolve to a commit')
     archive = run / 'ucm-source.tar'

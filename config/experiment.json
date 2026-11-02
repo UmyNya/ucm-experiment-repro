@@ -139,6 +139,11 @@
     "server": "vllm.json",
     "ucm": "ucm.json",
     "aisbench": "aisbench.json",
-    "swe": "swe-rebench.json"
+    "swe": "swe-rebench.json",
+    "server_env": "vllm-env.json"
+  },
+  "ucm_runtime": {
+    "enabled": true,
+    "source_ref": "HEAD"
   }
 }

@@ -24,13 +24,19 @@ python3 -B -m unittest discover -s tests -v
 | 路径 | 内容 |
 |---|---|
 | `config/experiment.json` | 公共路径、平台、容量、负载和实验流程 |
-| `config/vllm.json`、`config/ucm.json` | 服务与缓存策略 |
+| `config/vllm.json` | vLLM 原生服务参数；新增参数可直接写入，JSON 参数直接使用对象 |
+| `config/vllm-env.json` | 公共、CUDA、Ascend 服务环境变量 |
+| `config/ucm.json` | UCM connector 与缓存策略 |
 | `config/aisbench.json`、`config/swe-rebench.json` | 客户端输入和负载 |
 | `scripts/` | 服务、校准、客户端、实验与报告入口 |
 | `native/`、`reference/patches/` | 原生采集支持与 UCM 观测补丁 |
 | `reference/layouts/` | 历史 CUDA 数值布局示例，换模型或后端需要重新测量 |
 | `tests/` | 离线测试、匿名数值样例及可选客户端集成检查 |
 | `requirements.txt` | 本包结果解析、报告与离线测试使用的 NumPy、Matplotlib 版本 |
+
+vLLM 参数统一采用原生参数名，例如 `tensor_parallel_size`、`quantization`、`attention_config`、`additional_config`。写法、环境变量示例和公共配置的分工见 [vLLM 参数参考](USAGE.md#vllmjson-参数参考)。每次服务启动前生成 `vllm-effective.yaml`，通过 `vllm serve --config` 加载；完整命令和环境覆盖保存在该次运行的 `plan.json`。
+
+UCM 配置采用原生顶层字段与 `ucm_connectors[].ucm_connector_config` 结构。源码引用和启用开关在主配置的 `ucm_runtime` 中，容量和私有缓存路径由公共配置生成；写法与兼容规则见 [UCM 参数参考](USAGE.md#ucmjson-参数参考)。
 
 ## 环境探测与容量布局
 

@@ -1,0 +1,11 @@
+{
+  "environment": {
+    "ENABLE_UCM_PATCH": "1"
+  },
+  "platform_environment": {
+    "cuda": {
+      "GLM51_LAYERWISE_SYNC_FIX": "1"
+    },
+    "ascend": {}
+  }
+}

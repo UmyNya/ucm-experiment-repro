@@ -19,14 +19,13 @@ class ConfigurationTest(unittest.TestCase):
     def test_one_config_applies_to_all_five_profiles(self):
         self.c["load"]["concurrency"] = 7
         self.c["server"]["max_num_seqs"] = 3
-        self.c["ucm"]["store"]["cache_dump_capacity_policy"] = "spill"
+        self.c["ucm"]["ucm_connectors"][0]["ucm_connector_config"]["cache_dump_capacity_policy"] = "spill"
         self.c["capacity"]["hbm"]["tokens"] = 160000
         self.c["capacity"]["l2"]["gib"] = 17
         for profile in self.c["profiles"]:
             with self.subTest(profile=profile):
                 p = compile_plan(self.c, profile, ROOT / "runs/test-plan" / profile)
-                args = p["server_command"]
-                self.assertEqual(args[args.index("--max-num-seqs") + 1], "3")
+                self.assertEqual(p["vllm_configuration"]["max-num-seqs"], 3)
                 self.assertEqual(p["capacity"]["kv_cache_memory_bytes"], 2686080000)
                 store = p["ucm_configuration"]["ucm_connectors"][0]["ucm_connector_config"]
                 self.assertEqual(store["cache_dump_capacity_policy"], "spill")
@@ -45,7 +44,7 @@ class ConfigurationTest(unittest.TestCase):
 
     def test_separate_config_files_have_recorded_sources(self):
         sources = {x['section']: x for x in self.c['configuration_sources']}
-        self.assertEqual(set(sources), {'main', 'server', 'ucm', 'aisbench', 'swe'})
+        self.assertEqual(set(sources), {'main', 'server', 'server_env', 'ucm', 'aisbench', 'swe'})
         self.assertEqual(Path(sources['server']['path']).name, 'vllm.json')
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)/'main.json'
