@@ -94,6 +94,12 @@ def generate(runs, *, include_validation=False, output_root=None, formats=None):
         source, plan = Path(row['path']), row['plan']
         lines += [f'### {row["label"]} · {source.parent.name} · {source.name}', '',
                   f'输入指纹：`{row["input_fingerprint"]}`；模式：{plan["mode"]}；范围：{row["scope"]}。', '']
+        if row.get('observed_hbm'):
+            lines += ['自动 HBM 实测容量（各 worker 分别记录）：', '',
+                      '| worker rank | KV 字节数 | KV 物理 tokens |', '|---|---:|---:|']
+            for worker in row['observed_hbm']:
+                lines.append(f'| {worker["rank"]} | {worker["kv_tensor_bytes"]} | {worker["hbm_physical_tokens"]} |')
+            lines += ['', '自动规划出的实际容量不同的记录分别分组，不合并为同一配置的重复轮。', '']
         for name in ['compilation-check.json', 'before-capacity-validation.json', 'after-capacity-validation.json',
                      'before-workers.json', 'after-workers.json', 'native-statistics.json', 'cache-preparation.json', 'service-metrics.jsonl',
                      'client-settings.json', 'client-command.json', 'pipeline-summary.json',

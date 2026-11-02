@@ -1,0 +1,6 @@
+# Direct dependencies for result parsing, reports, and offline validation.
+# NumPy also needs to be available in the AISBench client Python environment.
+# These versions were verified with Python 3.12; this is not a full environment lock.
+# vLLM/UCM/Ascend and benchmark clients use their own environment requirements.
+numpy==1.26.4
+matplotlib==3.10.0

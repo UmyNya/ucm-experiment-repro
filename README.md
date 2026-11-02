@@ -6,7 +6,7 @@
 
 ## 从哪里开始
 
-1. 阅读 [环境要求](ENVIRONMENT.md)，准备容器中可用的模型、源码仓库和 Python 依赖。
+1. 阅读 [环境要求](ENVIRONMENT.md)，准备容器中可用的模型、源码仓库和 Python 依赖。本包结果解析、报告与离线测试的直接依赖见 [requirements.txt](requirements.txt)，服务和客户端依赖按各自组件准备。
 2. 修改 [主配置](config/experiment.json) 中的示例路径、平台、设备和容量。`/workspace/...`、`/models/your-model` 是占位路径。
 3. 按 [准备服务环境](USAGE.md#准备服务环境) 构建 UCM，并配置生成的服务 Python 路径。
 4. 根据目的选择 [独立服务与客户端](USAGE.md#独立启动顺序) 或 [单配置完整实验](USAGE.md#单配置完整实验与报告)。完整参数解释见 [主配置参数参考](USAGE.md#主配置参数参考)。
@@ -30,6 +30,7 @@ python3 -B -m unittest discover -s tests -v
 | `native/`、`reference/patches/` | 原生采集支持与 UCM 观测补丁 |
 | `reference/layouts/` | 历史 CUDA 数值布局示例，换模型或后端需要重新测量 |
 | `tests/` | 离线测试、匿名数值样例及可选客户端集成检查 |
+| `requirements.txt` | 本包结果解析、报告与离线测试使用的 NumPy、Matplotlib 版本 |
 
 ## 环境探测与容量布局
 
@@ -48,7 +49,9 @@ python3 -B scripts/capacity.py \
 
 ### 如何测量并生成自己的 layout JSON
 
-完成服务环境准备后，用 `scripts/calibrate_capacity.py` 启动模型读取真实 worker 布局。它使用配置中的 HBM/L1 物理预算，分配缓存，测量后停止服务。操作步骤、生成文件和 tokens 换算见 [容量说明](USAGE.md#hbml1l2-容量)。它不会自动搜索最大可用容量。
+完成服务环境准备后，用 `scripts/calibrate_capacity.py` 启动模型读取真实 worker 布局。HBM 使用 `auto` 时由引擎自动规划，否则使用配置中的 HBM 物理预算；L1 使用物理预算。测量后停止服务，操作步骤与 tokens 换算见 [容量说明](USAGE.md#hbml1l2-容量)。脚本不会通过反复尝试搜索最大可用容量。
+
+设置 `capacity.hbm.mode="auto"` 可按设备与模型运行时占用自动规划 KV cache，预算比例由 `config/vllm.json` 中的 `gpu_memory_utilization` 控制。实际分配量在服务启动后记录，配置示例见 [自动 HBM 容量](USAGE.md#自动-hbm-容量)。
 
 ## 数据与验证范围
 

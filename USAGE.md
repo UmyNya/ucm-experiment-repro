@@ -164,11 +164,33 @@ pipeline 的服务 warmup/客户端协议按相应类型执行。采集增加开
 
 全部位于 **config/experiment.json → capacity**。
 
-| 层 | 按 tokens 配置 | 按物理容量配置 |
-|---|---|---|
-| HBM | hbm.mode=tokens，hbm.tokens；calculation.method=bytes_per_token 并指定 bytes_per_token，或 calibration | hbm.mode=physical，hbm.bytes |
-| L1 | l1.mode=tokens，l1.tokens；calculation.method=layout 指定 node_bytes/nodes_per_block/reserved_nodes，或 calibration | l1.mode=physical，l1.gib（整数 GiB） |
-| L2 | 不使用 tokens | l2.gib（整数 GiB），另选 enforcement |
+| 层 | 自动规划 | 按 tokens 配置 | 按物理容量配置 |
+|---|---|---|---|
+| HBM | hbm.mode=auto，使用 vllm.json 的 gpu_memory_utilization | hbm.mode=tokens，hbm.tokens；calculation.method=bytes_per_token 并指定 bytes_per_token，或 calibration | hbm.mode=physical，hbm.bytes |
+| L1 | 不支持 | l1.mode=tokens，l1.tokens；calculation.method=layout 指定 node_bytes/nodes_per_block/reserved_nodes，或 calibration | l1.mode=physical，l1.gib（整数 GiB） |
+| L2 | 不支持 | 不使用 tokens | l2.gib（整数 GiB），另选 enforcement |
+
+### 自动 HBM 容量
+
+将 `config/experiment.json` 中已有的 `capacity.hbm.mode` 改为 `auto`，并在 `config/vllm.json` 中设置 `gpu_memory_utilization`。例如 `0.9` 表示让引擎按每张卡总显存的 90% 规划该实例的模型运行预算；KV cache 的实际分配还需扣除模型权重、激活和运行时等占用，并按引擎 block 取整。这不是将总显存的 90% 全部分配给 KV cache，也不保证与其他进程共享设备时一定可用。
+
+```bash
+# 查看自动 HBM 计划；不启动服务。
+python3 -B scripts/plan.py --profile swe_w24_n3379_performance \
+  --set 'capacity.hbm.mode="auto"' --set server.gpu_memory_utilization=0.9
+
+# 运行完整实验时也可使用相同覆盖；需要先准备目标服务环境。
+python3 -B scripts/experiment_swe_n3379_performance.py \
+  --set 'capacity.hbm.mode="auto"' --set server.gpu_memory_utilization=0.9
+```
+
+auto 模式下，脚本省略 `--kv-cache-memory-bytes`，由 vLLM/对应 Ascend 后端规划容量。`hbm.tokens`、`hbm.bytes` 和 HBM 换算系数不生效；旧校准文件只有在 L1 使用校准换算时才会读取。无需删除其他模式的配置字段，默认模式仍为 `tokens`。
+
+启动前计划中的 `kv_cache_memory_bytes` 和 `hbm_target_tokens` 为 `null`，表示尚未测得实际容量。启动后 `plan.json` 的 `capacity.observed_hbm`、`startup-workers.json` 和 `capacity-validation.json` 记录每个 worker 的实际 KV 字节数及 tokens，并继续检查张量/block 一致性和 L1 容量。自动分配出的实际容量不同的记录会在报告中分组统计，缺少有效容量观测的受管服务记录不计入有效结果。需要严格固定容量做对照时，应使用 `physical` 或校准后的 `tokens` 模式。
+
+CUDA/Ascend 的计划生成均支持 auto；实际自动规划能力仍以目标 vLLM/后端版本的运行结果为准。
+
+### 固定容量与布局校准
 
 HBM tokens 必须按 server.block_size 对齐。换算式为 `tokens / block_size × 实测每block字节`；它指 KV 物理 block 总量，可供请求分配的上界还要扣保留 block。TP/PP/DP 下按各 worker 观察，不盲目乘除卡数。
 
@@ -179,11 +201,15 @@ L1 普通 tokens 为 `floor((floor(GiB×2^30/node_bytes)−reserved_nodes)/nodes
 历史默认 HBM 320000 tokens / 5372160000 bytes、L1 19 GiB 仅适用于历史测得布局，不能直接作为 Ascend 或其他模型/TP 的容量证据。
 
 ```bash
-# 用配置中的 hbm.bytes、l1.gib 启动校准服务，测量 worker 布局后自动停止。
+# 默认用 hbm.bytes、l1.gib 启动校准；hbm.mode=auto 时保留引擎自动规划。
 python3 -B scripts/calibrate_capacity.py --profile swe_w24_n192_performance
+
+# 不预先指定 KV 字节预算，由引擎自动规划后测量实际布局。
+python3 -B scripts/calibrate_capacity.py --profile swe_w24_n192_performance \
+  --set 'capacity.hbm.mode="auto"' --set server.gpu_memory_utilization=0.9
 ```
 
-校准会实际启动服务、加载模型和分配缓存，读取布局后停止本次服务；不会自动搜索最大容量。查看新目录中的 capacity-calibration.json、startup-workers.json、capacity-validation.json。将 `capacity.calibration_file` 指向汇总校准文件，将需要使用实测换算的 HBM/L1 `calculation.method` 改成 `calibration`，再设置 `mode=tokens` 和目标值。脚本不会自动改写配置。校准文件绑定模型配置哈希、HF overrides、后端、TP/PP/DP、block size、KV dtype 及 UCM 布局参数，身份不同则拒绝复用。
+校准会实际启动服务、加载模型和分配缓存，读取布局后停止本次服务。HBM 为 auto 时保留自动规划；其他 HBM 模式使用 `hbm.bytes` 作为启动预算。L1 始终使用 `l1.gib`，校准过程中不读取已有校准文件。脚本不会通过反复尝试搜索最大容量。查看新目录中的 capacity-calibration.json、startup-workers.json、capacity-validation.json。将 `capacity.calibration_file` 指向汇总校准文件，将需要使用实测换算的 HBM/L1 `calculation.method` 改成 `calibration`，再设置 `mode=tokens` 和目标值；也可继续保留 HBM auto。脚本不会自动改写配置。校准文件绑定模型配置哈希、HF overrides、后端、TP/PP/DP、block size、KV dtype 及 UCM 布局参数，使用校准换算时身份不同则拒绝复用。
 
 同时生成 `layouts/worker-000.json`、`worker-001.json` 等单 worker 布局，文件内记录实际 rank/PID，可直接传给 `capacity.py --layout`。例如 `--layout runs/实际校准目录/layouts/worker-000.json`；目录名需替换为脚本打印的路径。汇总文件与单 worker layout 的完整用法见 [README 的测量说明](README.md#如何测量并生成自己的-layout-json)。
 
@@ -266,10 +292,10 @@ python3 -B -m unittest discover -s tests -v
 
 | 字段 | 默认值 | 含义及生效条件 |
 |---|---|---|
-| `capacity.calibration_file` | `null` | `calibrate_capacity.py` 生成的汇总 `capacity-calibration.json` 路径。设置后检查模型、平台、并行数及布局身份；换模型或平台后不能直接复用。 |
-| `capacity.hbm.mode` | `tokens` | `tokens` 从目标 token 数换算字节；`physical` 直接使用 `hbm.bytes`。 |
+| `capacity.calibration_file` | `null` | 汇总 `capacity-calibration.json` 路径。HBM 或 L1 使用 tokens + calibration 时读取，并检查模型、平台、并行数及布局身份；未使用校准换算时不读取。 |
+| `capacity.hbm.mode` | `tokens` | `auto` 使用 vLLM 的 `gpu_memory_utilization` 自动规划 KV 容量；`tokens` 从目标 token 数换算字节；`physical` 直接使用 `hbm.bytes`。 |
 | `capacity.hbm.tokens` | `320000` | token 模式的 KV 物理 block 总容量，需为 `server.block_size` 的整数倍；请求可用容量还要扣除引擎保留 block。 |
-| `capacity.hbm.bytes` | `5372160000` | physical 模式的 KV 字节预算。容量校准脚本也使用此值作为启动预算。 |
+| `capacity.hbm.bytes` | `5372160000` | physical 模式的 KV 字节预算。容量校准时，HBM 非 auto 才使用此值作为启动预算。 |
 | `capacity.hbm.calculation.method` | `bytes_per_token` | token 模式下，`bytes_per_token` 使用指定系数，`calibration` 使用校准文件中的每 block 字节数。 |
 | `capacity.hbm.calculation.bytes_per_token` | `16788` | `bytes_per_token` 方法的换算系数；目标字节数为 `tokens × bytes_per_token`。仅适用于对应模型、KV dtype、平台及并行布局。 |
 | `capacity.hbm.calculation.basis` | 历史 CUDA 布局说明 | 换算依据的说明文字，保存在配置中，不参与计算。 |
@@ -292,9 +318,9 @@ python3 -B -m unittest discover -s tests -v
 - `filesystem`：使用预先准备的受限文件系统，脚本检查其总容量不超过 `filesystem_limit_gib`。它不会自动为普通目录配置 quota。
 - `loopback`：创建指定大小的 ext4 镜像并挂载到专属 L2 目录；需要容器已有挂载能力和相关工具，真实挂载尚未验证。文件系统元数据会占用部分空间。
 
-HBM 与 L1 可以独立选择模式。默认组合是 **HBM 按 tokens 换算，L1 直接使用 19 GiB**。inactive 字段不会叠加生效，也不是在启动失败时自动使用的备用预算。保留 `hbm.bytes` 和 `l1.gib` 可供容量校准启动使用。
+HBM 与 L1 可以独立选择模式。默认组合是 **HBM 按 tokens 换算，L1 直接使用 19 GiB**。不生效的字段不会叠加，也不是启动失败时的备用预算。HBM auto 可与 L1 的任一种模式组合；容量校准时 L1 使用 `l1.gib`，HBM 非 auto 时使用 `hbm.bytes`。
 
-上述换算系数来自历史 CUDA GLM14L TP1 布局。`ucm.json` 的 `posix_packed_layer_bytes` 默认是 `null`，L1 换算字段不会替它恢复历史 packed 布局。Ascend、其他模型、并行数或存储布局应先配置可启动的物理预算，再按 [容量校准步骤](#hbml1l2-容量) 获取实际布局。
+上述换算系数来自历史 CUDA GLM14L TP1 布局。`ucm.json` 的 `posix_packed_layer_bytes` 默认是 `null`，L1 换算字段不会替它恢复历史 packed 布局。Ascend、其他模型、并行数或存储布局可配置 HBM auto 或可启动的物理预算，再按 [容量校准步骤](#hbml1l2-容量) 获取实际布局。
 
 ### load：客户端负载
 

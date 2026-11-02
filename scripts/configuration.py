@@ -202,9 +202,9 @@ def validate(c):
     keys(c["capacity"]["hbm"], "mode tokens bytes calculation", "capacity.hbm")
     keys(c["capacity"]["l1"], "mode gib tokens rounding calculation", "capacity.l1")
     keys(c["capacity"]["l2"], "gib enforcement filesystem_limit_gib", "capacity.l2")
-    for name in ["hbm", "l1"]:
-        if c["capacity"][name]["mode"] not in {"tokens", "physical"}:
-            raise ValueError(f"capacity.{name}.mode must be tokens or physical")
+    for name, modes in [("hbm", {"tokens", "physical", "auto"}), ("l1", {"tokens", "physical"})]:
+        if c["capacity"][name]["mode"] not in modes:
+            raise ValueError(f"capacity.{name}.mode must be one of {sorted(modes)}")
     positive(c["capacity"]["l2"]["gib"], "capacity.l2.gib")
     if c["capacity"]["l2"]["enforcement"] not in {"ucm_gc_budget", "filesystem", "loopback"}:
         raise ValueError("Unknown L2 enforcement mode")
@@ -217,11 +217,17 @@ def validate(c):
 def capacity_plan(c):
     cap, block = c["capacity"], c["server"]["block_size"]
     hbm, l1, l2 = cap["hbm"], cap["l1"], cap["l2"]
-    calibration = read_json(cap["calibration_file"]) if cap["calibration_file"] else None
+    needs_calibration = any(tier["mode"] == "tokens" and tier["calculation"]["method"] == "calibration"
+                            for tier in [hbm, l1])
+    calibration = read_json(cap["calibration_file"]) if needs_calibration and cap["calibration_file"] else None
     workers = calibration["workers"] if calibration else []
     if calibration and calibration.get("identity") != model_identity(c):
         raise ValueError("Capacity calibration identity differs from model/backend/parallel/cache configuration")
-    if hbm["mode"] == "physical":
+    if hbm["mode"] == "auto":
+        # vLLM profiles the model/runtime before assigning KV memory. There is
+        # no truthful fixed byte or token target until the workers start.
+        hbm_bytes, target = None, None
+    elif hbm["mode"] == "physical":
         positive(hbm["bytes"], "capacity.hbm.bytes")
         hbm_bytes, target = hbm["bytes"], None
     else:
@@ -269,7 +275,7 @@ def capacity_plan(c):
             if l1["rounding"] == "exact" and r["l1_derived_ordinary_tokens"] != l1["tokens"]:
                 raise ValueError("Exact L1 target is not simultaneously representable on all workers")
             l1_derived.append(r)
-    return {"kv_cache_memory_bytes": hbm_bytes, "hbm_target_tokens": target,
+    return {"hbm_mode": hbm["mode"], "kv_cache_memory_bytes": hbm_bytes, "hbm_target_tokens": target,
             "cache_buffer_capacity_gb": l1_gib, "l1_target_tokens": l1["tokens"] if l1["mode"] == "tokens" else None,
             "l1_per_worker_derivation": l1_derived, "posix_capacity_gb": l2["gib"],
             "l2_enforcement": l2["enforcement"], "l2_filesystem_limit_gib": l2["filesystem_limit_gib"],
@@ -310,8 +316,9 @@ def compile_plan(config, profile, run_dir):
     ucm = {**c["ucm"]["launch"], "ucm_connectors": [{"ucm_connector_name": "UcmPipelineStore", "ucm_connector_config": store}]}
     args = [c["paths"]["server_python"], "-B", "-m", "vllm.entrypoints.openai.api_server",
             "--model", c["paths"]["model"], "--host", s["host"], "--port", str(s["port"]),
-            "--served-model-name", s["served_model_name"], "--max-model-len", str(max_len),
-            "--kv-cache-memory-bytes", str(capacity["kv_cache_memory_bytes"])]
+            "--served-model-name", s["served_model_name"], "--max-model-len", str(max_len)]
+    if capacity["kv_cache_memory_bytes"] is not None:
+        args += ["--kv-cache-memory-bytes", str(capacity["kv_cache_memory_bytes"])]
     for key in ["seed", "tensor_parallel_size", "data_parallel_size", "pipeline_parallel_size",
                 "max_num_seqs", "max_num_batched_tokens", "block_size", "gpu_memory_utilization", "kv_cache_dtype"]:
         args += ["--" + key.replace("_", "-"), str(s[key])]

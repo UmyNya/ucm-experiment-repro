@@ -184,6 +184,12 @@ class Service:
             save_json(self.run/'capacity-validation.json', check)
             if not check['passed'] and c['validation']['require_exact_capacity']:
                 raise ValueError('; '.join(check['errors']))
+            self.plan['capacity']['actual_capacity_verified'] = check['passed']
+            self.plan['capacity']['observed_hbm'] = sorted(
+                [{'rank': worker['rank'], 'kv_tensor_bytes': worker['kv_tensor_bytes'],
+                  'hbm_physical_tokens': worker['hbm_physical_tokens']} for worker in check['workers']],
+                key=lambda worker: (worker['rank'], worker['kv_tensor_bytes'], worker['hbm_physical_tokens']))
+            save_json(self.run/'plan.json', self.plan)
             save_json(self.run/'service-status.json', {'status': 'ready', 'base_url': self.plan['base_url'],
                       'supervisor': identity(os.getpid()), 'started_utc': utc(), 'capacity_passed': check['passed']})
             self.rows = rows

@@ -52,6 +52,12 @@ def collect(run):
         pipeline = maybe(path/'pipeline-summary.json')
         if active_plan['mode'] == 'pipeline' and (not pipeline or not pipeline.get('passed')):
             reasons.append('流水线采集/关联校验未通过')
+        observed_hbm = None
+        if actual_service and actual_service['configuration']['capacity']['hbm']['mode'] == 'auto':
+            capacity = actual_service['capacity']
+            observed_hbm = capacity.get('observed_hbm')
+            if not capacity.get('actual_capacity_verified') or not observed_hbm:
+                reasons.append('自动 HBM 缺少通过校验的实际容量记录')
         synthetic = bool(active_plan.get('validation_only') or plan.get('validation_only'))
         # Model, workload and observation scopes must match before aggregation.
         compare = {'client': active_plan['client'], 'mode': active_plan['mode'], 'scope': scope,
@@ -71,6 +77,8 @@ def collect(run):
                                                          if k not in {'configuration_sources', 'paths', 'execution', 'label'}}
             parameters['actual_service_configuration']['server'] = {k:v for k,v in parameters['actual_service_configuration']['server'].items() if k not in {'host','port'}}
         parameters['built_ucm_identity'] = {'commit': environment['source']['exported_commit'], 'wheel_sha256': environment['wheel_sha256']} if environment else None
+        if observed_hbm is not None:
+            parameters['auto_hbm_observed_capacity'] = observed_hbm
         identity = json_hash(parameters)
         output.append({'run': str(run), 'path': str(path), 'phase': phase, 'scope': scope,
                        'label': config['label'], 'configuration_group': identity, 'comparability': compare,
@@ -78,6 +86,7 @@ def collect(run):
                        'valid': not reasons, 'excluded_reasons': reasons, 'synthetic': synthetic,
                        'performance': performance, 'samples': maybe(path/'request-samples.json', []),
                        'compilation': compilation, 'cleanup': cleanup, 'pipeline': pipeline,
+                       'observed_hbm': observed_hbm,
                        'plan': active_plan, 'root_status': maybe(run/'status.json', {})})
     return output
 

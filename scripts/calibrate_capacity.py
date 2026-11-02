@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure capacity on the selected backend/model/parallel layout using physical budgets."""
+"""Measure worker layouts with physical L1 and an explicit or automatic HBM budget."""
 import argparse
 from pathlib import Path
 
@@ -28,16 +28,22 @@ def write_calibration(run, value):
               'note': 'Set mode=tokens and desired token targets after reviewing this measurement; original configuration is never rewritten'})
 
 
+def calibration_config(path, overrides=()):
+    # Preserve engine-selected HBM sizing; explicit/token configurations use
+    # their physical bootstrap budget without relying on a stale calibration.
+    config = load(path, [*overrides, 'capacity.l1.mode="physical"', 'capacity.calibration_file=null'])
+    if config['capacity']['hbm']['mode'] != 'auto':
+        config['capacity']['hbm']['mode'] = 'physical'
+    return config
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, default=BUNDLE/'config/experiment.json')
     parser.add_argument('--profile', default='swe_w24_n192_performance')
     parser.add_argument('--set', action='append', default=[])
     args = parser.parse_args()
-    # Bootstrap with explicitly configured physical budgets. A previous tokens
-    # factor/calibration must not prevent measuring a new backend or model.
-    c = load(args.config, [*args.set, 'capacity.hbm.mode="physical"', 'capacity.l1.mode="physical"',
-                           'capacity.calibration_file=null'])
+    c = calibration_config(args.config, args.set)
     run = new_run(c, args.profile, 'capacity-calibration')
     print(run, flush=True)
     try:

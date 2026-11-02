@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'scripts'))
-from configuration import load
+from configuration import compile_plan, load
 from common import save_json
 from processes import same_process
 from service import Service
@@ -60,6 +60,19 @@ class ServiceLifecycleTest(unittest.TestCase):
             self.assertGreater(occupied.fileno(), 0)
             self.assertIsNone(self.server.process)
             self.assertFalse(self.server.storage.created)
+
+    def test_auto_hbm_records_observed_capacity_in_service_plan(self):
+        self.server.plan['configuration']['capacity']['hbm']['mode'] = 'auto'
+        compiled = compile_plan(self.server.plan['configuration'], 'aisbench_n40_performance', self.server.run)
+        self.server.plan['capacity'] = compiled['capacity']
+        with patch('service.attest_environment', return_value=self.attestation):
+            with self.server:
+                saved = json.loads((self.server.run / 'plan.json').read_text())
+                capacity = saved['capacity']
+                self.assertIsNone(capacity['kv_cache_memory_bytes'])
+                self.assertTrue(capacity['actual_capacity_verified'])
+                self.assertEqual(capacity['observed_hbm'], [
+                    {'rank': 0, 'kv_tensor_bytes': 5372160000, 'hbm_physical_tokens': 320000}])
 
     def test_failed_launcher_releases_its_session_and_storage(self):
         self.server.plan['server_command'] = [sys.executable, '-B', '-c', 'raise SystemExit(7)']

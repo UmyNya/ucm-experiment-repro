@@ -25,6 +25,8 @@ def validate_workers(plan, rows, *, enforce_targets=True):
         expected_platform = 'cuda' if c['platform']['kind'] == 'cuda' else 'npu'
         if row['platform'] != expected_platform:
             errors.append('Observed device backend differs from config')
+        if type(row['hbm_blocks']) is not int or row['hbm_blocks'] <= layout['hbm_reserved_blocks']:
+            raise ValueError('Invalid observed HBM block count: no allocatable blocks')
         block = layout['block_tokens']
         hbm = row['hbm_blocks'] * block
         l1 = (row['l1_nodes'] - layout['l1_reserved_nodes']) // layout['l1_nodes_per_token_block'] * block
@@ -32,7 +34,10 @@ def validate_workers(plan, rows, *, enforce_targets=True):
             errors.append('Observer capacity values disagree with its layout')
         if row['kv_tensor_bytes'] != row['hbm_blocks'] * layout['hbm_bytes_per_block']:
             errors.append('Actual KV tensor bytes disagree with block allocation')
-        if row['hbm_blocks'] > expected['kv_cache_memory_bytes'] // layout['hbm_bytes_per_block']:
+        budget = expected['kv_cache_memory_bytes']
+        if c['capacity']['hbm']['mode'] != 'auto' and (type(budget) is not int or budget <= 0):
+            raise ValueError('Explicit HBM mode requires a positive physical byte budget')
+        if budget is not None and row['hbm_blocks'] > budget // layout['hbm_bytes_per_block']:
             errors.append('Actual HBM KV allocation exceeds requested physical budget')
         nodes = expected['cache_buffer_capacity_gb'] * (1 << 30) // layout['l1_node_bytes']
         if row['l1_nodes'] != nodes:
