@@ -10,6 +10,7 @@ from configuration import load, compile_plan
 from run_client import prepare, attempt
 from service import Service, interrupt_cleanup
 from analyze_pipeline import analyze_capture
+from block_size import input_block_size
 
 
 def execute(config, profile, run, *, service_factory=Service, prepare_inputs=prepare, run_client=attempt,
@@ -22,10 +23,15 @@ def execute(config, profile, run, *, service_factory=Service, prepare_inputs=pre
     state = {'status': 'preparing', 'profile': profile, 'started_utc': utc(), 'stages': [],
              'single_configuration': True, 'input_fingerprint': None}
     save_json(run/'campaign-state.json', state)
-    try:
+    def prepare_once():
         prepare_inputs(plan, run)
         prepared = read_json(run/'inputs/PREPARATION.json')
         state['input_fingerprint'] = prepared['input_fingerprint']
+
+    try:
+        delayed_inputs = plan['client'] == 'aisbench' and config['server'].get('block_size') is None
+        if not delayed_inputs:
+            prepare_once()
         stages = []
         if config['execution']['compile_calibration']:
             stages += [('calibration', index+1) for index in range(config['execution']['calibration_repetitions'])]
@@ -42,6 +48,15 @@ def execute(config, profile, run, *, service_factory=Service, prepare_inputs=pre
             state['status'] = phase
             save_json(run/'campaign-state.json', state)
             with service_factory(c, profile, directory/'service', compile_cache=run/'compile-cache') as service:
+                if plan['client'] == 'aisbench':
+                    block = input_block_size(service.plan)
+                    if delayed_inputs and state['input_fingerprint'] is None:
+                        plan['observed_block_size'] = block
+                        plan['model_identity']['block_size'] = block
+                        save_json(run/'plan.json', plan)
+                        prepare_once()
+                    elif block != input_block_size(plan):
+                        raise ValueError('Service block_size changed from the prepared AISBench input alignment')
                 selected = copy.deepcopy(service.plan)
                 selected.update(measurement_phase=phase, repetition=repetition,
                                 input_fingerprint=state['input_fingerprint'], campaign=str(run),

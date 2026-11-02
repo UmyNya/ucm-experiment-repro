@@ -11,6 +11,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'scripts'))
 from configuration import compile_plan, load
+from capacity_validation import calibration_record
 from common import save_json
 from processes import same_process
 from service import Service
@@ -82,6 +83,51 @@ class ServiceLifecycleTest(unittest.TestCase):
                     pass
         self.assertTrue(self.server.process.cleanup['released'])
         self.assertFalse(self.server.storage.path.exists())
+
+    def reconfigure(self, config):
+        command = self.server.plan['server_command']
+        row = json.loads((self.server.run/'fixture-worker.json').read_text())
+        self.server = Service(config, 'aisbench_n40_performance', self.root/'reconfigured-service')
+        save_json(self.server.run/'fixture-worker.json', row)
+        self.server.plan['server_command'] = command
+
+    def test_omitted_block_records_worker_value_without_changing_engine_config(self):
+        c = self.server.plan['configuration']
+        del c['server']['block_size']
+        c['capacity']['hbm']['mode'] = 'auto'
+        self.reconfigure(c)
+        with patch('service.attest_environment', return_value=self.attestation):
+            with self.server as server:
+                saved = json.loads((server.run/'plan.json').read_text())
+                self.assertIsNone(saved['configuration']['server']['block_size'])
+                self.assertEqual(saved['observed_block_size'], 64)
+                self.assertEqual(saved['model_identity']['block_size'], 64)
+                self.assertNotIn('block-size', json.loads((server.run/'vllm-effective.yaml').read_text()))
+                record = calibration_record(saved, server.rows)
+                self.assertEqual(record['identity']['block_size'], 64)
+        self.assertTrue(json.loads((self.server.run/'resource-cleanup.json').read_text())['released'])
+
+    def test_calibrated_block_mismatch_stops_even_with_relaxed_capacity_validation(self):
+        row = json.loads((self.server.run/'fixture-worker.json').read_text())
+        calibration = calibration_record(self.server.plan, [row])
+        path = self.root/'calibration.json'
+        save_json(path, calibration)
+        c = self.server.plan['configuration']
+        c['server']['block_size'] = None
+        c['capacity']['hbm']['mode'] = 'auto'
+        c['capacity']['l1'].update(mode='tokens', calculation={'method': 'calibration'})
+        c['capacity']['calibration_file'] = str(path)
+        c['validation']['require_exact_capacity'] = False
+        self.reconfigure(c)
+        row['capacity_layout']['block_tokens'] = 128
+        row['hbm_tokens'] *= 2
+        row['l1_ordinary_tokens'] *= 2
+        save_json(self.server.run/'fixture-worker.json', row)
+        with patch('service.attest_environment', return_value=self.attestation):
+            with self.assertRaisesRegex(ValueError, 'Actual block_size differs'):
+                with self.server:
+                    pass
+        self.assertTrue(json.loads((self.server.run/'resource-cleanup.json').read_text())['released'])
 
 
 if __name__ == '__main__':

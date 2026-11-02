@@ -58,6 +58,7 @@ def normalize_server(server):
     normalized.setdefault("extra_args", [])
     normalized.setdefault("environment", {})
     normalized.setdefault("platform_environment", {})
+    normalized.setdefault("block_size", None)
     return normalized
 
 
@@ -198,8 +199,10 @@ def validate(c):
         raise ValueError("visible_devices contains duplicates")
     s = c["server"]
     for key in ["port", "tensor_parallel_size", "data_parallel_size", "pipeline_parallel_size",
-                "max_num_seqs", "max_num_batched_tokens", "block_size"]:
+                "max_num_seqs", "max_num_batched_tokens"]:
         positive(s[key], "server." + key)
+    if s.get("block_size") is not None:
+        positive(s["block_size"], "server.block_size")
     if s["port"] > 65535 or s["host"] not in {"127.0.0.1", "localhost", "0.0.0.0"}:
         raise ValueError("Use a local IPv4 bind host and a port <=65535")
     if math.prod(s[k] for k in ["tensor_parallel_size", "pipeline_parallel_size", "data_parallel_size"]) > len(devices):
@@ -286,14 +289,22 @@ def validate(c):
 
 
 def capacity_plan(c):
-    cap, block = c["capacity"], c["server"]["block_size"]
+    cap, block = c["capacity"], c["server"].get("block_size")
     hbm, l1, l2 = cap["hbm"], cap["l1"], cap["l2"]
     needs_calibration = any(tier["mode"] == "tokens" and tier["calculation"]["method"] == "calibration"
                             for tier in [hbm, l1])
     calibration = read_json(cap["calibration_file"]) if needs_calibration and cap["calibration_file"] else None
     workers = calibration["workers"] if calibration else []
-    if calibration and calibration.get("identity") != model_identity(c):
-        raise ValueError("Capacity calibration identity differs from model/backend/parallel/cache configuration")
+    if calibration:
+        identity = model_identity(c)
+        if block is None:
+            block = calibration.get("identity", {}).get("block_size")
+            positive(block, "Calibrated block_size")
+            identity["block_size"] = block
+        if calibration.get("identity") != identity:
+            raise ValueError("Capacity calibration identity differs from model/backend/parallel/cache configuration")
+        if any(w.get("block_tokens") != block for w in workers):
+            raise ValueError("Capacity calibration worker block sizes differ from its identity")
     if hbm["mode"] == "auto":
         # vLLM profiles the model/runtime before assigning KV memory. There is
         # no truthful fixed byte or token target until the workers start.
@@ -304,7 +315,7 @@ def capacity_plan(c):
     else:
         positive(hbm["tokens"], "capacity.hbm.tokens")
         target = hbm["tokens"]
-        if target % block:
+        if block is not None and target % block:
             raise ValueError("HBM tokens must be a multiple of server.block_size")
         if hbm["calculation"]["method"] == "calibration":
             if not workers:
@@ -334,6 +345,9 @@ def capacity_plan(c):
                 raise ValueError("Token L1 calibration method requires capacity.calibration_file")
             layouts = workers
         elif calc["method"] == "layout":
+            if block is None:
+                raise ValueError("L1 tokens with layout conversion require an explicit server.block_size; "
+                                 "use physical L1 or calibrate and select calculation.method=calibration")
             layouts = [{"block_tokens": block, "hbm_bytes_per_block": 1,
                         "l1_node_bytes": calc["node_bytes"], "l1_nodes_per_token_block": calc["nodes_per_block"],
                         "l1_reserved_nodes": calc["reserved_nodes"]}]
@@ -347,6 +361,7 @@ def capacity_plan(c):
                 raise ValueError("Exact L1 target is not simultaneously representable on all workers")
             l1_derived.append(r)
     return {"hbm_mode": hbm["mode"], "kv_cache_memory_bytes": hbm_bytes, "hbm_target_tokens": target,
+            "calculation_block_size": block,
             "cache_buffer_capacity_gb": l1_gib, "l1_target_tokens": l1["tokens"] if l1["mode"] == "tokens" else None,
             "l1_per_worker_derivation": l1_derived, "posix_capacity_gb": l2["gib"],
             "l2_enforcement": l2["enforcement"], "l2_filesystem_limit_gib": l2["filesystem_limit_gib"],
@@ -360,7 +375,7 @@ def model_identity(c):
     result = {"model_path": c["paths"]["model"], "model_config_sha256": sha256(path) if path.is_file() else None,
             "hf_overrides": s["hf_overrides"], "platform": c["platform"]["kind"],
             "tp": s["tensor_parallel_size"], "pp": s["pipeline_parallel_size"], "dp": s["data_parallel_size"],
-            "block_size": s["block_size"], "kv_dtype": s["kv_cache_dtype"],
+            "block_size": s.get("block_size"), "kv_dtype": s["kv_cache_dtype"],
             "ucm_layout_config": {k: store_config(c).get(k) for k in ["cache_full_block_l1", "cache_full_block_load", "posix_packed_layer_bytes", "cache_load_exclusive_buffer_number"]},
             "use_layerwise": c["ucm"].get("use_layerwise")}
     extensions = {k: v for k, v in s.items() if k not in SECTIONS["server"].split() and v is not None}

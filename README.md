@@ -36,6 +36,8 @@ python3 -B -m unittest discover -s tests -v
 
 vLLM 参数统一采用原生参数名，例如 `tensor_parallel_size`、`quantization`、`attention_config`、`additional_config`。写法、环境变量示例和公共配置的分工见 [vLLM 参数参考](USAGE.md#vllmjson-参数参考)。每次服务启动前生成 `vllm-effective.yaml`，通过 `vllm serve --config` 加载；完整命令和环境覆盖保存在该次运行的 `plan.json`。
 
+`vllm.json` 中的 `block_size` 可以省略或设为 `null`，由引擎决定；脚本不会补默认值。启动后记录实际 worker block size，AISBench 使用实测值准备输入。容量换算和独立客户端的要求见 [省略 block_size](USAGE.md#省略-block_size)。
+
 UCM 配置采用原生顶层字段与 `ucm_connectors[].ucm_connector_config` 结构。源码引用和启用开关在主配置的 `ucm_runtime` 中，容量和私有缓存路径由公共配置生成；写法与兼容规则见 [UCM 参数参考](USAGE.md#ucmjson-参数参考)。
 
 ## 环境探测与容量布局

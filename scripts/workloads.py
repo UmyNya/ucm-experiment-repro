@@ -12,6 +12,7 @@ import shutil
 import sys
 
 from common import read_json, save_json, sha256, json_hash
+from block_size import input_block_size
 
 
 def activate_source(plan):
@@ -25,6 +26,7 @@ def activate_source(plan):
 
 
 def ais_config(plan):
+    block = input_block_size(plan)
     activate_source(plan)
     from aisbench_ucm.config import DEFAULTS, validate
     c = plan["configuration"]
@@ -34,7 +36,7 @@ def ais_config(plan):
     for key in ["source", "n", "input_tokens", "prefix_ratio", "seed", "shuffle", "dataset", "warmup_dataset"]:
         config["workload"][key] = c["aisbench"][key]
     config["workload"]["output_tokens"] = c["load"]["output_tokens"]
-    config["workload"]["block_size"] = c["server"]["block_size"]
+    config["workload"]["block_size"] = block
     config["endpoint"] = {"base_url": plan["base_url"], "model": c["server"]["served_model_name"],
                           "tokenizer": c["paths"]["tokenizer"], "api_key_env": "AISBENCH_API_KEY"}
     executable = c["paths"]["aisbench_python"]

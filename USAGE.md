@@ -102,6 +102,8 @@ python3 -B scripts/run_swe.py --base-url http://127.0.0.1:18290
 
 `--base-url` 默认只验证客户端；配置中的服务设置不等同对端实际设置。加 `--observe` 要求对端提供本包 BundleObserver RPC，核对容量和物理写回排空。`--service-run` 自动启用 observe，并使用已启动服务的实际模型、并行数、容量等设置，客户端 tokenizer 必须一致。任何此类外部客户端测试都不会擅自重启服务。独立 pipeline 客户端要求服务也使用 pipeline profile 启动，采集后的分析步骤见后文。
 
+AISBench 配置省略 `block_size` 时，使用 `--service-run` 读取服务的实测值，或通过 `--observe` 查询 BundleObserver 后准备输入。只有普通 OpenAI 接口时无法读取该值，需要在客户端配置中明确填写已知的实际 `block_size`；脚本不会推测。详见 [省略 block_size](#省略-block_size)。
+
 ## 单配置完整实验与报告
 
 完成 [准备服务环境](#准备服务环境) 并配置 `paths.server_python` 后，直接执行完整实验入口。该入口自行启动服务并调用公共客户端流程，无需预先执行 `serve.py start` 或另外调用 `run_aisbench.py` / `run_swe.py`。它不接管已有独立服务，配置中的服务端口和设备资源应可供新服务使用。
@@ -194,7 +196,7 @@ CUDA/Ascend 的计划生成均支持 auto；实际自动规划能力仍以目标
 
 ### 固定容量与布局校准
 
-HBM tokens 必须按 server.block_size 对齐。换算式为 `tokens / block_size × 实测每block字节`；它指 KV 物理 block 总量，可供请求分配的上界还要扣保留 block。TP/PP/DP 下按各 worker 观察，不盲目乘除卡数。
+HBM tokens 必须按实际 block size 对齐。配置中显式指定时提前检查；省略且使用 `bytes_per_token` 换算时，在服务启动后检查实际布局。校准换算式为 `tokens / block_size × 实测每block字节`；它指 KV 物理 block 总量，可供请求分配的上界还要扣保留 block。TP/PP/DP 下按各 worker 观察，不盲目乘除卡数。
 
 `hbm.bytes` 配置的是设备上 KV cache 的字节预算。模型权重、激活、通信缓冲和运行时也会占用 HBM，服务器所需总显存应计入这些部分；实际卡的总 HBM 由硬件决定。L1 是 UCM 的主存缓存预算，L2 是配置的存储目录/文件系统容量。
 
@@ -227,7 +229,7 @@ L2 的 `enforcement`：
 
 `prepare_environment.py` 只从 UCM 指定 commit 导出副本，build.jobs 控制构建并行数。依赖须已在镜像中，或在 build.wheelhouse 配置离线 wheels 并开启 install_dependencies。构建副本补丁记录在独立环境目录：固定提交标识、离线 CMake、禁止清理其他服务的旧共享内存、协调文件/SHM 使用本次命名空间，以及独立累计原生指标缓冲区。后者避免指标消费者禁用/清空造成错误的零 I/O 判断。`profiling.patch_files` 指定的附加补丁也只应用于副本。原仓库不会 checkout、reset 或 commit。
 
-`prepare_inputs.py --profile ...` 只准备和验证输入，不启动模型或发送请求。每次运行自动建立 runs/experiment_...，其中 config-sources/ 和 configuration.json 保存配置，executed-code/ 保存执行脚本，inputs/ 保存文本及精确 token 向量，attempts/ 保存客户端原始输出和 performance.json/request-samples.json。服务目录保存 server.log、startup-workers.json、实际容量和 resource-cleanup.json。
+`prepare_inputs.py --profile ...` 只准备和验证输入，不启动模型或发送请求。单独准备 AISBench 输入时需显式配置已知的 `server.block_size`；省略时应通过完整实验或带服务观测的独立客户端准备输入。SWE 输入准备不依赖该字段。每次运行自动建立 runs/experiment_...，其中 config-sources/ 和 configuration.json 保存配置，executed-code/ 保存执行脚本，inputs/ 保存文本及精确 token 向量，attempts/ 保存客户端原始输出和 performance.json/request-samples.json。服务目录保存 server.log、startup-workers.json、实际容量和 resource-cleanup.json。
 
 以下命令在已有容器内、本脚本包目录下执行。模型与缓存路径填写容器内可见的实际路径；探测命令使用服务所用的 Python，若服务使用独立虚拟环境，将 `python3` 替换为配置中 `paths.server_python` 的值。`--output` 指定新建的探测结果文件，记录脚本所在环境及该 Python 的信息。
 
@@ -460,7 +462,7 @@ HBM 与 L1 可以独立选择模式。默认组合是 **HBM 按 tokens 换算，
 }
 ```
 
-JSON 参数直接写对象，不需要再转义成字符串；内部字段名保持目标引擎要求的写法。`--attention_config.indexer_kv_dtype fp8` 对应上面的嵌套对象。数组直接写 JSON 数组。新增可选顶层参数设为 `null` 表示不传给引擎，使用引擎默认值；`max_model_len: null` 则使用选中 profile 的上下文长度。已有的并行数、容量相关字段及布尔字段仍按下表要求检查类型，需保留。数组及对象由 vLLM 原生配置加载器处理；空数组遵循原生“不追加参数”的行为。
+JSON 参数直接写对象，不需要再转义成字符串；内部字段名保持目标引擎要求的写法。`--attention_config.indexer_kv_dtype fp8` 对应上面的嵌套对象。数组直接写 JSON 数组。新增可选顶层参数设为 `null` 表示不传给引擎，使用引擎默认值；`block_size` 也可省略或设为 `null`，`max_model_len: null` 则使用选中 profile 的上下文长度。其余已有的并行数、容量相关字段及布尔字段仍按下表要求检查类型，需保留。数组及对象由 vLLM 原生配置加载器处理；空数组遵循原生“不追加参数”的行为。
 
 布尔开关使用 `true` / `false`。`true` 生成原生正向开关，`false` 显式生成 `--no-参数名`，避免某些 vLLM 版本通过 `--config` 加载时忽略 `false`。目标版本必须支持该负向开关；只有正向开关、默认关闭的选项，可删除该字段或设为 `null` 以使用默认值。未知参数、拼写错误以及不支持的开关由目标 vLLM 在启动时报告，离线 `plan.py` 不等于目标引擎兼容性检查。
 
@@ -510,7 +512,7 @@ python3 -B scripts/plan.py --profile swe_w24_n3379_performance \
 | `server.pipeline_parallel_size` | `1` | 流水线并行度 PP；模型层分配到多个阶段。可见设备数至少为 TP × PP × DP，且 UCM connector 必须支持所选组合。 |
 | `server.max_num_seqs` | `16` | 引擎每轮调度允许的最大序列数。它与 `load.concurrency`、`swe.session_pool` 分别配置。 |
 | `server.max_num_batched_tokens` | `8192` | 单次调度迭代的 token 预算，覆盖当轮 prefill/decode 工作；不是单条请求长度或整个实验 token 总数。 |
-| `server.block_size` | `64` | vLLM KV block 的 token 数，也用于本包 HBM 对齐和 AISBench 前缀按 block 取整。修改后需重新测量布局，检查后端和模型支持。 |
+| `server.block_size` | `64`（历史示例） | 可省略或设为 `null`，由引擎决定；显式填写时必须为正整数。用于 HBM 对齐和 AISBench 前缀取整，启动后核对 worker 实际值。详见下节。 |
 | `server.gpu_memory_utilization` | `0.92` | 引擎实例的设备显存使用比例，本包校验范围为 `(0,1]`。是否用于自动规划 KV 容量取决于最终命令是否指定 `--kv-cache-memory-bytes`；显式 KV 字节预算优先。字段名在 Ascend 配置中也保持不变。 |
 | `server.kv_cache_dtype` | `auto` | KV cache 数据类型；`auto` 由引擎按模型及后端选择。其他取值须为目标引擎支持的类型，改变后需重新核对每 token/block 的字节数。 |
 | `server.enable_prefix_caching` | `true` | 启用 vLLM 的前缀 KV 复用。此开关与 UCM Early 预取开关分别控制。 |
@@ -520,6 +522,37 @@ python3 -B scripts/plan.py --profile swe_w24_n3379_performance \
 | `server.async_scheduling` | `false` | 引擎异步调度开关。它不等于 UCM 的 `use_request_async_load`，也不控制客户端异步 HTTP 并发。 |
 
 模型目录和客户端 tokenizer 分别在 `experiment.json` 的 `paths.model`、`paths.tokenizer` 中配置。默认未设置服务的 `tokenizer` 参数，服务从模型目录加载 tokenizer；如果在 `vllm.json` 中显式添加 `tokenizer`，也需同步检查客户端的 `paths.tokenizer`，保证分词行为匹配。新增原生字段中的文件路径按 vLLM 自身语义处理；本包的服务工作目录是本次运行目录，建议这些路径填写容器内绝对路径。
+
+### 省略 block_size
+
+从 `vllm.json` 删除 `block_size`，或设置 `"block_size": null`，均表示不向引擎传递该参数。也可用 `--set server.block_size=null` 临时覆盖，脚本不会填入 `64`、`128` 或其他值。默认配置仍保留历史示例的 `64`。
+
+```bash
+# 仅检查计划；HBM 自动规划、L1 使用已有物理容量。
+python3 -B scripts/plan.py --profile aisbench_n40_performance \
+  --set server.block_size=null --set 'capacity.hbm.mode="auto"' \
+  --set 'capacity.l1.mode="physical"'
+
+# 在准备好环境的目标容器中执行单配置完整实验。
+python3 -B scripts/experiment_aisbench_performance.py \
+  --set server.block_size=null --set 'capacity.hbm.mode="auto"' \
+  --set 'capacity.l1.mode="physical"'
+```
+
+服务启动后从 BundleObserver 读取各 worker 的 `capacity_layout.block_tokens`，要求均为相同的正整数。`plan.json` 的 `observed_block_size` 和 `model_identity.block_size` 记录实测值，`configuration.server.block_size` 保留 `null`。报告展示配置值与实测值，实际值不同的记录分别分组；受管或已关联服务的记录缺少该观测时不计为有效结果。
+
+AISBench 完整实验先启动第一轮服务，取得实测值后准备一次输入，再进行协议预热和测量。后续校准轮、正式轮复用该输入；重启后 block size 改变会停止本次实验并清理该服务。独立客户端通过 `--service-run` 或 `--observe` 获取实际值；单独离线执行 `prepare_inputs.py` 没有服务观测，需显式配置已知值。
+
+容量配置按以下规则处理：
+
+| 容量方式 | 省略 block_size 时的处理 |
+|---|---|
+| HBM `auto` / `physical`，L1 `physical` | 可直接生成启动计划，服务启动后验证实际布局。 |
+| HBM `tokens` + `bytes_per_token` | 先按配置系数计算字节预算；启动后检查实际 block 对齐及目标 tokens。系数仍须与目标模型、后端匹配。 |
+| HBM/L1 `tokens` + `calibration` | 使用校准文件记录的实际 block size 换算；不把该值写入引擎启动参数。实际服务必须与校准值一致，否则停止并要求重新校准。 |
+| L1 `tokens` + `layout` | 无法在未知 block size 时计算启动所需 GiB；需显式指定 block size、使用校准换算或改为物理容量。 |
+
+`calibrate_capacity.py` 同样接受 `--set server.block_size=null`，并将实测值写入校准文件的 `identity.block_size`。校准文件仍校验模型、后端、并行数及其余布局身份。不同 worker 的 block size 不一致、无法观测或与容量换算依据冲突时，即使放宽 `require_exact_capacity` 也会停止，避免继续使用错误的换算或输入对齐。
 
 ## vllm-env.json 参数参考
 

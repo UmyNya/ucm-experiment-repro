@@ -94,6 +94,9 @@ def generate(runs, *, include_validation=False, output_root=None, formats=None):
         source, plan = Path(row['path']), row['plan']
         lines += [f'### {row["label"]} · {source.parent.name} · {source.name}', '',
                   f'输入指纹：`{row["input_fingerprint"]}`；模式：{plan["mode"]}；范围：{row["scope"]}。', '']
+        requested_block = plan['configuration']['server'].get('block_size')
+        lines += [f'block_size 配置：{number(requested_block) if requested_block is not None else "未指定，由引擎决定"}；'
+                  f'worker 实测：{number(row.get("observed_block_size"))} tokens/block。', '']
         if row.get('observed_hbm'):
             lines += ['自动 HBM 实测容量（各 worker 分别记录）：', '',
                       '| worker rank | KV 字节数 | KV 物理 tokens |', '|---|---:|---:|']

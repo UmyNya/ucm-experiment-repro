@@ -1,6 +1,7 @@
 """Validate actual worker capacity and create identity-bound calibration files."""
 import math
 
+from block_size import observed_block_size
 from common import utc
 
 
@@ -12,6 +13,17 @@ def validate_workers(plan, rows, *, enforce_targets=True):
         errors.append(f'Expected {count} unique workers, observed {len(rows)}')
     workers = []
     domains = {}
+    try:
+        actual_block = observed_block_size(rows)
+    except ValueError as error:
+        actual_block = None
+        errors.append(str(error))
+    expected_block = c['server'].get('block_size')
+    if expected_block is not None and actual_block != expected_block:
+        errors.append('Observed token block size differs from config')
+    calculation_block = expected.get('calculation_block_size')
+    if calculation_block is not None and actual_block != calculation_block:
+        errors.append('Observed token block size differs from the capacity calculation/calibration')
     for row in rows:
         layout = row['capacity_layout']
         for key in ['block_tokens', 'hbm_bytes_per_block', 'l1_node_bytes', 'l1_nodes_per_token_block']:
@@ -20,8 +32,6 @@ def validate_workers(plan, rows, *, enforce_targets=True):
         for key in ['hbm_reserved_blocks', 'l1_reserved_nodes']:
             if type(layout[key]) is not int or layout[key] < 0:
                 raise ValueError(f'Invalid observed {key}')
-        if layout['block_tokens'] != c['server']['block_size']:
-            errors.append('Observed token block size differs from config')
         expected_platform = 'cuda' if c['platform']['kind'] == 'cuda' else 'npu'
         if row['platform'] != expected_platform:
             errors.append('Observed device backend differs from config')
@@ -44,6 +54,8 @@ def validate_workers(plan, rows, *, enforce_targets=True):
             errors.append(f'L1 nodes differ from physical budget: {row["l1_nodes"]} != {nodes}')
         if enforce_targets:
             target = expected['hbm_target_tokens']
+            if target is not None and target % block:
+                errors.append('HBM token target is not aligned to the observed block size')
             if target is not None and hbm != target:
                 errors.append(f'HBM tokens differ: actual {hbm}, target {target}; calibrate target backend')
             target = expected['l1_target_tokens']
@@ -61,6 +73,7 @@ def validate_workers(plan, rows, *, enforce_targets=True):
                         'l1_payload_bytes': row['l1_nodes'] * layout['l1_node_bytes'],
                         'shared_memory': row['shared_memory'], 'unique_id': row['unique_id']})
     return {'checked_utc': utc(), 'passed': not errors, 'errors': errors, 'workers': workers,
+            'observed_block_size': actual_block,
             'unique_l1_domains': len(domains), 'enforced_token_targets': enforce_targets,
             'scope': 'per-worker KV allocation and per-domain L1 payload; not total device/host RSS'}
 
@@ -69,7 +82,8 @@ def calibration_record(plan, rows):
     validation = validate_workers(plan, rows, enforce_targets=False)
     if not validation['passed']:
         raise ValueError('Invalid observed capacity: ' + '; '.join(validation['errors']))
-    return {'schema_version': 1, 'created_utc': utc(), 'identity': plan['model_identity'],
+    identity = {**plan['model_identity'], 'block_size': validation['observed_block_size']}
+    return {'schema_version': 1, 'created_utc': utc(), 'identity': identity,
             'workers': [dict(r['capacity_layout'], worker_rank=r['worker_rank'], worker_pid=r['pid'],
                              unique_id=r['unique_id']) for r in rows],
             'validation': validation, 'source_run': plan['run_dir'],

@@ -53,6 +53,10 @@ def collect(run):
         if active_plan['mode'] == 'pipeline' and (not pipeline or not pipeline.get('passed')):
             reasons.append('流水线采集/关联校验未通过')
         observed_hbm = None
+        block_size = (actual_service or active_plan).get('observed_block_size')
+        if actual_service and actual_service['configuration']['server'].get('block_size') is None:
+            if type(block_size) is not int or block_size <= 0:
+                reasons.append('未指定 block_size 且缺少有效的实际 worker block 记录')
         if actual_service and actual_service['configuration']['capacity']['hbm']['mode'] == 'auto':
             capacity = actual_service['capacity']
             observed_hbm = capacity.get('observed_hbm')
@@ -79,6 +83,8 @@ def collect(run):
         parameters['built_ucm_identity'] = {'commit': environment['source']['exported_commit'], 'wheel_sha256': environment['wheel_sha256']} if environment else None
         if observed_hbm is not None:
             parameters['auto_hbm_observed_capacity'] = observed_hbm
+        if block_size is not None:
+            parameters['observed_block_size'] = block_size
         identity = json_hash(parameters)
         output.append({'run': str(run), 'path': str(path), 'phase': phase, 'scope': scope,
                        'label': config['label'], 'configuration_group': identity, 'comparability': compare,
@@ -87,6 +93,7 @@ def collect(run):
                        'performance': performance, 'samples': maybe(path/'request-samples.json', []),
                        'compilation': compilation, 'cleanup': cleanup, 'pipeline': pipeline,
                        'observed_hbm': observed_hbm,
+                       'observed_block_size': block_size,
                        'plan': active_plan, 'root_status': maybe(run/'status.json', {})})
     return output
 

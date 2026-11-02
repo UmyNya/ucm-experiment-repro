@@ -13,6 +13,8 @@ from configuration import load, compile_plan
 from ucm_configuration import normalize_ucm
 from processes import OwnedProcess, same_process
 from service import interrupt_cleanup
+from boundaries import rpc
+from block_size import input_block_size, observed_block_size
 
 
 def client_environment(run):
@@ -27,6 +29,8 @@ def client_python(plan):
 
 
 def prepare(plan, run, *, frozen_without_tokenizer=False):
+    if plan['client'] == 'aisbench':
+        input_block_size(plan)
     command = [client_python(plan), '-B', str(BUNDLE/'scripts/prepare_inputs.py'),
                '--worker-plan', str(run/'plan.json'), '--worker-output', str(run/'inputs')]
     if frozen_without_tokenizer:
@@ -90,7 +94,7 @@ def main(client=None):
         for name in ['capacity','model_identity','max_model_len','ucm_configuration','profiling_backend',
                      'server_command','server_environment','l2_path']:
             plan[name] = copy.deepcopy(server_plan[name])
-        for name in ['vllm_configuration', 'vllm_config_file']:
+        for name in ['vllm_configuration', 'vllm_config_file', 'observed_block_size']:
             plan.pop(name, None)
             if name in server_plan:
                 plan[name] = copy.deepcopy(server_plan[name])
@@ -119,6 +123,13 @@ def main(client=None):
     print(run, flush=True)
     try:
         with interrupt_cleanup():
+            if (plan['client'] == 'aisbench' and plan['configuration']['server'].get('block_size') is None
+                    and plan.get('observed_block_size') is None and observation):
+                rows = rpc(plan, 'bundle_snapshot', [False])
+                save_json(run/'input-layout-workers.json', rows)
+                plan['observed_block_size'] = observed_block_size(rows)
+                plan['model_identity']['block_size'] = plan['observed_block_size']
+                save_json(run/'plan.json', plan)
             prepare(plan, run)
             for index in range(c['execution']['repetitions']):
                 output = run/'attempts'/f'{index+1:03d}'

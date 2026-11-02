@@ -185,8 +185,15 @@ class Service:
             save_json(self.run/'startup-workers.json', rows)
             check = validate_workers(self.plan, rows, enforce_targets=self.enforce_capacity)
             save_json(self.run/'capacity-validation.json', check)
+            if check['observed_block_size'] is None:
+                raise ValueError('Cannot resolve one actual worker block_size: ' + '; '.join(check['errors']))
+            calculated_block = self.plan['capacity'].get('calculation_block_size')
+            if calculated_block is not None and check['observed_block_size'] != calculated_block:
+                raise ValueError('Actual block_size differs from the capacity calculation; recalibrate or update the explicit value')
             if not check['passed'] and c['validation']['require_exact_capacity']:
                 raise ValueError('; '.join(check['errors']))
+            self.plan['observed_block_size'] = check['observed_block_size']
+            self.plan['model_identity']['block_size'] = check['observed_block_size']
             self.plan['capacity']['actual_capacity_verified'] = check['passed']
             self.plan['capacity']['observed_hbm'] = sorted(
                 [{'rank': worker['rank'], 'kv_tensor_bytes': worker['kv_tensor_bytes'],
