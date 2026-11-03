@@ -3,6 +3,8 @@
 
 Runs inside the user's existing container. Never starts Docker, checks out a
 branch, changes a source repository, or installs into the base Python environment.
+For first-time setup, configure the source and Python paths, export without
+--build, then prepare Python wheels using the instructions in USAGE.md.
 """
 from __future__ import annotations
 
@@ -251,7 +253,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, default=BUNDLE/'config/experiment.json')
     parser.add_argument('--set', action='append', default=[])
-    parser.add_argument('--build', action='store_true', help='Actually build/install into the newly created private venv')
+    parser.add_argument('--build', action='store_true',
+                        help='Build/install into a new private venv; Python dependencies must already '
+                             'be available or prepared in build.wheelhouse (see USAGE.md)')
     args = parser.parse_args()
     os.umask(0o077)
     config = load(args.config, args.set)

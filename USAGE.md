@@ -2,6 +2,37 @@
 
 本包在已有容器内执行，不配置或启动 Docker。默认配置沿用历史实验作为示例，首次使用时先按服务器情况修改路径、平台、设备与容量。验证范围为离线测试；服务构建、推理与设备采集需要在实际运行环境中验证。
 
+## 首次安装顺序
+
+首次安装从下面的步骤开始，不需要历史运行目录。后续命令均在目标容器的仓库根目录执行，每一步成功后再进入下一步。
+
+1. **取得脚本并准备基础环境。** 在已有目标容器中取得本仓库；服务需要匹配的 vLLM、PyTorch、设备运行库和编译工具，Ascend 还需要 vllm-ascend、torch-npu 与 CANN。模型及 UCM 源码仓库由使用者提供，按 [环境说明](ENVIRONMENT.md) 准备；脚本不会创建容器或自动安装整套设备软件栈。
+2. **安装本包的结果解析、报告与测试依赖。** 使用管理脚本所用的 Python 安装本仓库 `requirements.txt`。它不包含 UCM、AISBench 或 SWE-rebench 的完整依赖；这些组件使用各自的清单。
+3. **填写配置。** 先按下表设置主配置与组件文件。构建前的 `paths.server_python` 指向基础服务 Python；构建成功后再替换为新建私有环境中的 Python。
+4. **首次准备 UCM 的 Python wheels。** 按 [准备 Python wheels](#准备-python-wheels) 导出所选提交的依赖清单，再下载到新目录。该步骤会说明如何设置 `UCM_PREPARED_RUN` 和 `UCM_WHEELHOUSE`，不要求提前存在这些变量。
+5. **构建并配置服务环境。** 按 [通过命令参数构建](#通过命令参数构建) 执行，然后按 [使用构建后的服务 Python](#使用构建后的服务-python) 更新 `paths.server_python`。
+6. **按需准备客户端并启动。** AISBench 和 SWE-rebench 的源码、Python 依赖及输入数据分别准备，解释器分别填写 `paths.aisbench_python` 和 `paths.swe_python`。只启动模型服务时不需要先运行客户端；启动顺序见 [独立启动顺序](#独立启动顺序)。
+
+获取脚本与安装本包依赖的命令如下。已有仓库时直接进入该目录；使用已有可访问 Python 包索引的环境执行安装：
+
+```bash
+git clone https://github.com/UmyNya/ucm-experiment-repro.git
+cd ucm-experiment-repro
+python3 -m pip install -r requirements.txt
+```
+
+首次配置至少检查以下项目。路径填写目标容器内实际可见的位置；主配置中的相对路径以 `config/experiment.json` 所在目录为基准。
+
+| 修改位置 | 首次使用时填写什么 |
+|---|---|
+| `paths.ucm_repository`、`ucm_runtime.source_ref` | UCM Git 仓库根目录及要构建的提交；只导出已提交的源码，默认要求工作树干净。 |
+| `paths.server_python` | 具备 vLLM、PyTorch 等服务依赖的基础 Python。与管理脚本不同环境时，使用对应解释器路径。 |
+| `paths.model`、`paths.tokenizer` | 服务模型和对应 tokenizer 的目录。 |
+| `paths.output_root`、`paths.l2_root` | 可写的运行记录与缓存位置；`l2_root=null` 时由脚本为每次运行创建私有缓存目录。 |
+| `platform`、`config/vllm.json`、`config/ucm.json` | 平台、可见设备、并行数、模型选项与缓存策略；示例值不保证适合新模型。 |
+| `capacity` | 根据实际模型和设备设置 HBM/L1/L2；换模型或后端时按 [容量说明](#hbml1l2-容量) 设置或校准。 |
+| 客户端路径、解释器及组件配置 | 运行 AISBench 或 SWE-rebench 前填写对应源码、依赖环境和输入数据配置，见 [环境说明](ENVIRONMENT.md)。 |
+
 ## 配置文件位置
 
 | 文件 | 修改内容 | 逐字段说明 |
@@ -55,11 +86,7 @@
 python3 -B scripts/plan.py --profile swe_w24_n192_performance
 ```
 
-构建入口为 `scripts/prepare_environment.py --build`。默认不安装 Python 依赖，也不联网获取原生依赖；只有新建 venv 可访问的基础环境已具备构建依赖、导出的 UCM 源码已包含所需 vendor 源码时，才能直接使用默认命令：
-
-```bash
-python3 -B scripts/prepare_environment.py --build
-```
+构建入口为 `scripts/prepare_environment.py --build`。首次安装应先完成下面的 Python wheels 下载，再执行带参数的构建命令。默认配置不安装 Python 依赖，也不联网获取原生依赖；仅在依赖已齐备时才适合直接使用默认构建命令。
 
 Python 依赖和原生依赖源码需要分别准备。Python wheels 通过 `build.wheelhouse` 提供；fmt、spdlog、pybind11、zlib 的源码由 UCM 的 CMake 配置获取。原仓库中未跟踪或被忽略的 vendor 目录不会随 `git archive` 导出，具体条件见 [原生依赖源码](ENVIRONMENT.md#原生依赖源码)。vLLM、PyTorch、CUDA/CANN 等平台环境仍由目标容器提供。
 
@@ -73,7 +100,7 @@ Python 依赖和原生依赖源码需要分别准备。Python wheels 通过 `bui
 python3 -B scripts/prepare_environment.py --set build.install_dependencies=false
 ```
 
-将输出目录填入 `UCM_PREPARED_RUN`。如果已有构建失败目录且其中存在 `source/requirements-build.txt` 和 `source/requirements.txt`，可直接使用该目录，无需重新导出。确认它对应当前要构建的 UCM 提交。
+命令成功后会打印本次源码准备目录，其中包含 `source/requirements-build.txt` 和 `source/requirements.txt`。将下面 `runs/实际准备目录` 替换为刚打印的目录；这是本次新生成的目录，不是仓库自带文件。`UCM_PREPARED_RUN` 保存该目录，`UCM_WHEELHOUSE` 保存接下来下载 Python 包的位置。更换 UCM 提交或目标 Python、系统架构时，应重新按相应依赖清单准备 wheels。
 
 ```bash
 UCM_PREPARED_RUN="runs/实际准备目录"

@@ -6,10 +6,13 @@
 
 ## 从哪里开始
 
-1. 阅读 [环境要求](ENVIRONMENT.md)，准备容器中可用的模型、源码仓库和 Python 依赖。本包结果解析、报告与离线测试的直接依赖见 [requirements.txt](requirements.txt)，服务和客户端依赖按各自组件准备。
-2. 修改 [主配置](config/experiment.json) 中的示例路径、平台、设备和容量。`/workspace/...`、`/models/your-model` 是占位路径。
-3. 按 [准备服务环境](USAGE.md#准备服务环境) 构建 UCM，并配置生成的服务 Python 路径。
-4. 根据目的选择 [独立服务与客户端](USAGE.md#独立启动顺序) 或 [单配置完整实验](USAGE.md#单配置完整实验与报告)。完整参数解释见 [主配置参数参考](USAGE.md#主配置参数参考)。
+首次安装从 [首次安装顺序](USAGE.md#首次安装顺序) 开始，无需已有运行目录或预先设置环境变量：
+
+1. 在已有目标容器中取得本仓库，按 [环境要求](ENVIRONMENT.md) 准备服务框架、模型与 UCM 源码。本仓库的 `requirements.txt` 只提供结果解析、报告与测试依赖。
+2. 修改 [主配置](config/experiment.json) 的路径、解释器、平台、设备和容量，并检查组件配置；所有示例路径和模型参数都需要按目标环境确认。
+3. [导出 UCM 依赖清单并首次下载 Python wheels](USAGE.md#准备-python-wheels)。此步骤只准备包，不安装服务或启动模型。
+4. [构建私有服务环境](USAGE.md#通过命令参数构建)，再将生成的 Python 路径填入配置。`--build` 只从本地 wheelhouse 安装 Python 依赖；原生源码下载需显式开启。
+5. 按需准备 AISBench 或 SWE-rebench 自身的依赖与数据，然后选择 [独立服务与客户端](USAGE.md#独立启动顺序) 或 [单配置完整实验](USAGE.md#单配置完整实验与报告)。
 
 ```bash
 # 仅检查最终配置和启动计划，不启动服务。
