@@ -1,4 +1,5 @@
 import copy
+from itertools import product
 from pathlib import Path
 import sys
 import tempfile
@@ -13,9 +14,11 @@ from run_experiment import execute
 
 class CampaignTest(unittest.TestCase):
     def test_each_profile_preserves_one_configuration_full_counts_and_fresh_services(self):
-        for profile in load(ROOT/'config/experiment.json')['profiles']:
-            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as tmp:
+        profiles = load(ROOT/'config/experiment.json')['profiles']
+        for profile, hbm_mode in product(profiles, ['tokens', 'auto', 'physical']):
+            with self.subTest(profile=profile, hbm_mode=hbm_mode), tempfile.TemporaryDirectory() as tmp:
                 c = load(ROOT/'config/experiment.json')
+                c['capacity']['hbm']['mode'] = hbm_mode
                 c['execution'].update(repetitions=2, calibration_repetitions=1)
                 events, services = [], []
                 class FixtureService:

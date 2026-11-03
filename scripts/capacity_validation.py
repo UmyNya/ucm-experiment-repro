@@ -7,6 +7,8 @@ from common import utc
 
 def validate_workers(plan, rows, *, enforce_targets=True):
     c, expected = plan['configuration'], plan['capacity']
+    token_targets = {tier: enforce_targets and c['capacity'][tier]['mode'] == 'tokens'
+                     for tier in ['hbm', 'l1']}
     count = math.prod(c['server'][k] for k in ['tensor_parallel_size', 'pipeline_parallel_size', 'data_parallel_size'])
     errors = []
     if len(rows) != count or len({r['pid'] for r in rows}) != count:
@@ -52,12 +54,13 @@ def validate_workers(plan, rows, *, enforce_targets=True):
         nodes = expected['cache_buffer_capacity_gb'] * (1 << 30) // layout['l1_node_bytes']
         if row['l1_nodes'] != nodes:
             errors.append(f'L1 nodes differ from physical budget: {row["l1_nodes"]} != {nodes}')
-        if enforce_targets:
+        if token_targets['hbm']:
             target = expected['hbm_target_tokens']
             if target is not None and target % block:
                 errors.append('HBM token target is not aligned to the observed block size')
             if target is not None and hbm != target:
                 errors.append(f'HBM tokens differ: actual {hbm}, target {target}; calibrate target backend')
+        if token_targets['l1']:
             target = expected['l1_target_tokens']
             if target is not None:
                 if l1 < target or (c['capacity']['l1']['rounding'] == 'exact' and l1 != target):
@@ -74,7 +77,8 @@ def validate_workers(plan, rows, *, enforce_targets=True):
                         'shared_memory': row['shared_memory'], 'unique_id': row['unique_id']})
     return {'checked_utc': utc(), 'passed': not errors, 'errors': errors, 'workers': workers,
             'observed_block_size': actual_block,
-            'unique_l1_domains': len(domains), 'enforced_token_targets': enforce_targets,
+            'unique_l1_domains': len(domains), 'enforced_token_targets': any(token_targets.values()),
+            'enforced_token_targets_by_tier': token_targets,
             'scope': 'per-worker KV allocation and per-domain L1 payload; not total device/host RSS'}
 
 

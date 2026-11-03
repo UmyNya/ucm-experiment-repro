@@ -5,6 +5,7 @@ from pathlib import Path
 import signal
 import shutil
 import socket
+import sys
 import time
 import uuid
 
@@ -185,6 +186,10 @@ class Service:
             save_json(self.run/'startup-workers.json', rows)
             check = validate_workers(self.plan, rows, enforce_targets=self.enforce_capacity)
             save_json(self.run/'capacity-validation.json', check)
+            skipped = [f"{tier} (mode={c['capacity'][tier]['mode']})" for tier in ['hbm', 'l1']
+                       if c['capacity'][tier]['mode'] != 'tokens']
+            if skipped:
+                print('Skipping token capacity targets: ' + ', '.join(skipped), file=sys.stderr, flush=True)
             if check['observed_block_size'] is None:
                 raise ValueError('Cannot resolve one actual worker block_size: ' + '; '.join(check['errors']))
             calculated_block = self.plan['capacity'].get('calculation_block_size')
