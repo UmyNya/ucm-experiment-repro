@@ -53,10 +53,57 @@
 ```bash
 # 检查渲染后的计划，不启动服务。
 python3 -B scripts/plan.py --profile swe_w24_n192_performance
+```
 
-# 在目标容器中实际构建私有 venv，不安装到原环境、不联网下载。
+构建入口为 `scripts/prepare_environment.py --build`。默认不安装 Python 依赖，也不联网获取原生依赖；只有新建 venv 可访问的基础环境已具备构建依赖、导出的 UCM 源码已包含所需 vendor 源码时，才能直接使用默认命令：
+
+```bash
 python3 -B scripts/prepare_environment.py --build
 ```
+
+Python 依赖和原生依赖源码需要分别准备。Python wheels 通过 `build.wheelhouse` 提供；fmt、spdlog、pybind11、zlib 的源码由 UCM 的 CMake 配置获取。原仓库中未跟踪或被忽略的 vendor 目录不会随 `git archive` 导出，具体条件见 [原生依赖源码](ENVIRONMENT.md#原生依赖源码)。vLLM、PyTorch、CUDA/CANN 等平台环境仍由目标容器提供。
+
+### 通过命令参数构建
+
+目标容器能够访问 UCM 声明的源码地址时，可从本地 wheelhouse 安装 Python 依赖，同时显式开启原生源码下载。以下示例假设 Python wheels 已放在本包的 `dependency-wheels/` 目录，版本与目标 Python、系统架构匹配；位置不同时修改 `UCM_WHEELHOUSE` 的值。该变量由使用者在当前 shell 中设置；其值作为配置路径传入，相对路径以主配置文件所在目录为基准，因此主配置位于 `config/` 时使用 `../dependency-wheels`。
+
+```bash
+export UCM_WHEELHOUSE="../dependency-wheels"
+
+python3 -B scripts/prepare_environment.py --build \
+  --set build.install_dependencies=true \
+  --set "build.wheelhouse=\"$UCM_WHEELHOUSE\"" \
+  --set 'build.cmake_args=["-DDOWNLOAD_DEPENDENCE=ON","-DFETCHCONTENT_FULLY_DISCONNECTED=OFF"]'
+```
+
+`--set` 只对本次运行生效，不修改配置文件。两个 CMake 选项需同时设置，显式值覆盖默认离线设置。若原配置中还有其他 `build.cmake_args`，请一并保留在命令的数组中，因为该覆盖会替换整个数组。Python 依赖仍从本地 wheelhouse 安装，不从 Python 包索引下载；原生源码按所选 UCM 提交声明的地址和版本获取。
+
+### 将构建参数写入配置文件
+
+需要重复使用相同构建方式时，将以下字段合并到 `config/experiment.json` 已有的 `build` 对象中。保留其他配置字段；若已有其他 CMake 参数，也要保留在数组中。`wheelhouse` 填写实际目录，路径规则与命令参数相同。
+
+```json
+{
+  "build": {
+    "install_dependencies": true,
+    "wheelhouse": "../dependency-wheels",
+    "cmake_args": [
+      "-DDOWNLOAD_DEPENDENCE=ON",
+      "-DFETCHCONTENT_FULLY_DISCONNECTED=OFF"
+    ]
+  }
+}
+```
+
+保存后直接执行：
+
+```bash
+python3 -B scripts/prepare_environment.py --build
+```
+
+每次构建都会创建新的环境目录和 venv，已有 Python wheels 可以重复使用。脚本自动将新 venv 的 `bin` 放在构建子进程 `PATH` 首位，供构建后端查找 `cmake` 等工具，原有路径保留在后，无需手动修改 `PATH`。最终路径与 CMake 参数分别记录在 `build-plan.json` 的 `environment_changes.PATH` 和 `environment_changes.BUNDLE_CMAKE_ARGS` 中。
+
+### 使用构建后的服务 Python
 
 构建成功后，命令打印环境目录，默认形式为 `runs/experiment_service_environment_时间戳_唯一标识/`。从该目录的 `service-environment.json` 读取应填写的完整路径，将命令中的占位目录替换为实际输出目录：
 
@@ -227,7 +274,7 @@ L2 的 `enforcement`：
 
 目标镜像、客户端依赖、历史锁文件和迁移要求见 [ENVIRONMENT.md](ENVIRONMENT.md)。客户端可以继续使用各自已安装的环境，无需与服务共用 Python。
 
-`prepare_environment.py` 只从 UCM 指定 commit 导出副本，build.jobs 控制构建并行数。依赖须已在镜像中，或在 build.wheelhouse 配置离线 wheels 并开启 install_dependencies。构建副本补丁记录在独立环境目录：固定提交标识、离线 CMake、禁止清理其他服务的旧共享内存、协调文件/SHM 使用本次命名空间，以及独立累计原生指标缓冲区。后者避免指标消费者禁用/清空造成错误的零 I/O 判断。`profiling.patch_files` 指定的附加补丁也只应用于副本。原仓库不会 checkout、reset 或 commit。
+`prepare_environment.py` 只从 UCM 指定 commit 导出副本，build.jobs 控制构建并行数。Python 依赖须已可用，或在 build.wheelhouse 配置离线 wheels 并开启 install_dependencies；原生依赖需要导出源码中的 vendor 目录，或显式开启 CMake 获取。构建副本补丁记录在独立环境目录：固定提交标识、CMake 参数注入、禁止清理其他服务的旧共享内存、协调文件/SHM 使用本次命名空间，以及独立累计原生指标缓冲区。后者避免指标消费者禁用/清空造成错误的零 I/O 判断。`profiling.patch_files` 指定的附加补丁也只应用于副本。原仓库不会 checkout、reset 或 commit。
 
 `prepare_inputs.py --profile ...` 只准备和验证输入，不启动模型或发送请求。单独准备 AISBench 输入时需显式配置已知的 `server.block_size`；省略时应通过完整实验或带服务观测的独立客户端准备输入。SWE 输入准备不依赖该字段。每次运行自动建立 runs/experiment_...，其中 config-sources/ 和 configuration.json 保存配置，executed-code/ 保存执行脚本，inputs/ 保存文本及精确 token 向量，attempts/ 保存客户端原始输出和 performance.json/request-samples.json。服务目录保存 server.log、startup-workers.json、实际容量和 resource-cleanup.json。
 
@@ -424,7 +471,7 @@ HBM 与 L1 可以独立选择模式。默认组合是 **HBM 按 tokens 换算，
 | 字段 | 默认值 | 含义 |
 |---|---|---|
 | `build.jobs` | `2` | UCM 构建并行度。按 CPU 和主存资源调整，不是设备卡数或请求并发。 |
-| `build.cmake_args` | `[]` | 额外 CMake 参数数组，例如 `["-DCMAKE_BUILD_TYPE=Release"]。构建脚本仍会强制关闭联网下载依赖。 |
+| `build.cmake_args` | `[]` | 额外 CMake 参数数组，追加在默认参数之后，同名 `-D` 设置以最后一个为准。默认离线；同时传入 `-DDOWNLOAD_DEPENDENCE=ON` 和 `-DFETCHCONTENT_FULLY_DISCONNECTED=OFF` 可显式启用原生依赖下载，见 [原生依赖源码](ENVIRONMENT.md#原生依赖源码)。 |
 | `build.wheelhouse` | `null` | 离线 Python 依赖包目录；启用 `install_dependencies` 时必须填写。 |
 | `build.install_dependencies` | `false` | `false` 依赖基础 Python 已安装的包；`true` 在新建虚拟环境中从 wheelhouse 安装 UCM 的构建和运行依赖。 |
 | `build.image_label` | `quay.io/ascend/vllm-ascend:v0.30.0-a5` | 记录镜像名称的说明字段，不拉取镜像、不启动容器、不安装此版本，也不核验镜像 digest。 |

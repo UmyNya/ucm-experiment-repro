@@ -12,6 +12,7 @@
 |---|---|
 | 本仓库 [requirements.txt](requirements.txt) | 本包结果解析、报告和离线测试的 NumPy、Matplotlib 直接依赖，使用 Python 3.12 下验证过的版本。不是完整传递依赖锁文件。 |
 | UCM 源码的 `requirements-build.txt`、`requirements.txt` | UCM 构建与运行依赖。开启 `build.install_dependencies` 时，环境准备脚本读取所选 UCM 提交中的这两份文件。 |
+| UCM 的 `ucm/shared/vendor/dep-*.cmake` | fmt、spdlog、pybind11、zlib 等原生依赖的源码版本和获取地址；Python wheelhouse 不提供这些源码目录。 |
 | AISBench / SWE-rebench 自身的 requirements 或平台对应安装说明 | 各自客户端 Python 环境的依赖；不能用本仓库 requirements 代替。 |
 | 服务镜像与设备软件栈 | vLLM、PyTorch、vllm-ascend、torch-npu、CUDA/CANN、驱动及系统编译工具链，按目标平台和版本准备。 |
 
@@ -37,6 +38,25 @@ python3 -B scripts/prepare_environment.py --build \
 
 依赖安装默认关闭；缺少依赖时构建会报错，不会自动联网。其他 Python 版本或平台应先核对可用 wheel 与组件约束，再调整相应清单；不要把报告环境的版本固定项直接用于替换服务镜像的软件栈。
 
+## 原生依赖源码
+
+UCM 的原生构建需要 fmt、spdlog、pybind11、zlib 等源码。`pip install` 安装的 Python 包和构建工具不能代替这些源码目录，例如 Python 的 `pybind11` 包不等同于 UCM 的 `ucm/shared/vendor/pybind11` 源码树。
+
+默认使用 `DOWNLOAD_DEPENDENCE=OFF` 和 `FETCHCONTENT_FULLY_DISCONNECTED=ON`，要求导出的构建源码中已经包含所需 vendor 目录。源码通过 `git archive` 从指定提交导出；原仓库内未跟踪或被忽略的依赖目录不会自动复制。只有依赖声明而没有 vendor 源码的普通 checkout，需要显式允许下载后才能构建。
+
+目标容器能够访问所选 UCM 源码声明的 Git 地址时，可执行：
+
+```bash
+python3 -B scripts/prepare_environment.py --build \
+  --set build.install_dependencies=true \
+  --set 'build.wheelhouse="../../dependency-wheels"' \
+  --set 'build.cmake_args=["-DDOWNLOAD_DEPENDENCE=ON","-DFETCHCONTENT_FULLY_DISCONNECTED=OFF"]'
+```
+
+将 `build.wheelhouse` 替换为已准备的 Python wheels 目录；相对路径以主配置文件目录为基准。两个 CMake 参数需一起设置。`build.cmake_args` 按顺序追加在默认参数之后，因此显式值优先；若已有其他 CMake 参数，将它们一并保留在数组中。只生成计划时省略 `--build`，不会触发 CMake 下载。
+
+原生依赖的地址和版本由导出源码的 `dep-*.cmake` 决定，获取过程记录在该次 wheel 构建日志中；Python 依赖仍从本地 wheelhouse 安装。最终 CMake 参数见 `build-plan.json` 的 `environment_changes.BUNDLE_CMAKE_ARGS`。CANN、编译器及系统开发库仍由目标容器提供。
+
 ## 各组件环境
 
 | 环境 | 来源及要求 |
@@ -59,6 +79,8 @@ python3 -m venv /本包目录/新SWE环境
 ```
 
 UCM 构建默认 `--no-index`、`--no-deps`、`--no-build-isolation`，缺依赖就失败并保留日志；`build.wheelhouse` 和 `install_dependencies` 提供显式的离线依赖来源。`build.jobs` 控制编译并行数。CUDA 的原生库和编译缓存不能直接用于 Ascend，应在对应平台重新构建。每份私有环境保存 source commit、补丁与 wheel 哈希、Python/原生文件清单，服务启动时复核。
+
+构建子进程的 `PATH` 以本次新建的 `venv/bin` 开头，后面保留调用者原有的 `PATH`，因此可以调用安装在该 venv 中的 `cmake` 等命令，同时保留系统编译器和 Ascend 工具路径。实际值记录在 `build-plan.json` 的 `environment_changes.PATH`。如果仍报 `No such file or directory: 'cmake'`，检查依赖安装日志和该 venv 下的 `bin/cmake`；关闭依赖安装时，需要已有可用的 CMake 命令。
 
 迁移脚本包至少保留 `config/`、`scripts/`、`native/`、`reference/patches/`、`requirements.txt` 与使用说明；运行容量示例和离线测试时还需保留 `reference/layouts/` 与 `tests/`。已有结果需要连同引用它们的报告目录层级一起迁移，保留 `REPORT.md` 相对路径所指向的图表和原始数据。
 

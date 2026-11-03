@@ -135,7 +135,7 @@ def adapt_copy(source, run, commit, jobs):
     patch = run / 'build-and-resource-isolation.patch'
     patch.write_text(''.join(changes))
     return {'patch': patch.name, 'sha256': sha256(patch),
-            'scope': 'Offline build flags/parallelism, truthful source stamp, run-scoped coordination/SHM names, disable broad stale-SHM deletion, independent cumulative native metric snapshot; no cache scheduling changes'}
+            'scope': 'Recorded CMake options/parallelism, truthful source stamp, run-scoped coordination/SHM names, disable broad stale-SHM deletion, independent cumulative native metric snapshot; no cache scheduling changes'}
 
 
 def apply_user_patches(config, source, run):
@@ -184,6 +184,33 @@ def native_instrumentation(config, source, run):
             'event_clock': 'CLOCK_MONOTONIC nanoseconds', 'implementation': 'portable JSONL native recorder, no CUDA/NVTX dependency'}
 
 
+def build_environment(config, run):
+    """Create an environment that can resolve private build tools.
+
+    The backend invokes CMake by name. Installing its wheel is insufficient
+    unless the new venv's executable directory is also on PATH.
+
+    Args:
+        config: Loaded experiment configuration.
+        run: Path to the private build run directory.
+
+    Returns:
+        Environment variables for build and installation subprocesses.
+    """
+    # CMake keeps the last -D value, so explicit user settings must follow defaults.
+    cmake_args = ['-DDOWNLOAD_DEPENDENCE=OFF', '-DFETCHCONTENT_FULLY_DISCONNECTED=ON',
+                  *config['build']['cmake_args']]
+    return {**os.environ, 'PLATFORM': config['platform']['kind'], 'PYTHONDONTWRITEBYTECODE': '1',
+            'PATH': str(run/'venv/bin') + os.pathsep + os.environ.get('PATH', os.defpath),
+            'PIP_NO_INDEX': '1', 'PIP_DISABLE_PIP_VERSION_CHECK': '1',
+            'PIP_CACHE_DIR': str(run/'scratch/pip'), 'TMPDIR': str(run/'scratch/tmp'),
+            'ENABLE_SPARSE': 'FALSE', 'BUILD_UCM_ASU': '0', 'UCM_ENABLE_MINDIE': '0',
+            'BUILD_KV_CLIENT_PROVIDER_AIV': '0', 'BUILD_KV_CLIENT_PROVIDER_AICPU': '0',
+            'ENABLE_GDR': '0', 'ENABLE_UCM_PATCH': '0',
+            'CUDA_VISIBLE_DEVICES': '', 'ASCEND_RT_VISIBLE_DEVICES': '',
+            'BUNDLE_CMAKE_ARGS': shlex.join(cmake_args)}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, default=BUNDLE/'config/experiment.json')
@@ -204,15 +231,7 @@ def main():
         venv = run/'venv'
         python = str(venv/'bin/python')
         wheelhouse = config['build']['wheelhouse']
-        env = {**os.environ, 'PLATFORM': config['platform']['kind'], 'PYTHONDONTWRITEBYTECODE': '1',
-               'PIP_NO_INDEX': '1', 'PIP_DISABLE_PIP_VERSION_CHECK': '1',
-               'PIP_CACHE_DIR': str(run/'scratch/pip'), 'TMPDIR': str(run/'scratch/tmp'),
-               'ENABLE_SPARSE': 'FALSE', 'BUILD_UCM_ASU': '0', 'UCM_ENABLE_MINDIE': '0',
-               'BUILD_KV_CLIENT_PROVIDER_AIV': '0', 'BUILD_KV_CLIENT_PROVIDER_AICPU': '0',
-               'ENABLE_GDR': '0', 'ENABLE_UCM_PATCH': '0',
-               'CUDA_VISIBLE_DEVICES': '', 'ASCEND_RT_VISIBLE_DEVICES': '',
-               'BUNDLE_CMAKE_ARGS': shlex.join(config['build']['cmake_args'] +
-                  ['-DDOWNLOAD_DEPENDENCE=OFF', '-DFETCHCONTENT_FULLY_DISCONNECTED=ON'])}
+        env = build_environment(config, run)
         (run/'scratch/tmp').mkdir(parents=True)
         commands = [[config['paths']['server_python'], '-m', 'venv', '--system-site-packages', str(venv)]]
         if config['build']['install_dependencies']:
@@ -223,7 +242,7 @@ def main():
         commands.append([python, '-m', 'pip', 'wheel', '--no-index', '--no-deps', '--no-build-isolation',
                          '--wheel-dir', str(run/'wheels'), str(source)])
         save_json(run/'build-plan.json', {'commands': commands, 'environment_changes': {k: env[k] for k in [
-                  'PLATFORM', 'PIP_NO_INDEX', 'TMPDIR', 'ENABLE_SPARSE', 'BUILD_UCM_ASU', 'BUNDLE_CMAKE_ARGS',
+                  'PATH', 'PLATFORM', 'PIP_NO_INDEX', 'TMPDIR', 'ENABLE_SPARSE', 'BUILD_UCM_ASU', 'BUNDLE_CMAKE_ARGS',
                   'UCM_ENABLE_MINDIE', 'BUILD_KV_CLIENT_PROVIDER_AIV', 'BUILD_KV_CLIENT_PROVIDER_AICPU',
                   'ENABLE_GDR', 'ENABLE_UCM_PATCH', 'CUDA_VISIBLE_DEVICES', 'ASCEND_RT_VISIBLE_DEVICES']},
                   'base_image_label_not_verified_digest': config['build']['image_label'],

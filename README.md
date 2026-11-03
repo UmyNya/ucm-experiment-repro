@@ -40,6 +40,8 @@ vLLM 参数统一采用原生参数名，例如 `tensor_parallel_size`、`quanti
 
 UCM 配置采用原生顶层字段与 `ucm_connectors[].ucm_connector_config` 结构。源码引用和启用开关在主配置的 `ucm_runtime` 中，容量和私有缓存路径由公共配置生成；写法与兼容规则见 [UCM 参数参考](USAGE.md#ucmjson-参数参考)。
 
+构建 UCM 还需要 fmt、spdlog、pybind11、zlib 等原生依赖源码，它们不由 Python wheelhouse 提供。默认离线；联网准备方式通过 `build.cmake_args` 显式开启，见 [原生依赖源码](ENVIRONMENT.md#原生依赖源码)。
+
 ## 环境探测与容量布局
 
 以下命令在已有容器中、本仓库目录下执行。`--output` 指定新建结果，相对路径从命令所在目录计算；重复执行时使用新名称。
