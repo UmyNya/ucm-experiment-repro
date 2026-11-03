@@ -268,6 +268,10 @@ pipeline 的服务 warmup/客户端协议按相应类型执行。采集增加开
 
 全部位于 **config/experiment.json → capacity**。
 
+容量模式按 HBM/L1 分别处理：HBM 的 `auto`、`physical` 和 L1 的 `physical` 跳过 token 容量换算及目标校验，保留配置中的 token 值供以后切换模式使用。只有某层使用 `mode=tokens` 且 `calculation.method=calibration` 时才读取并检查 `capacity.calibration_file`；未使用的旧文件即使缺失、损坏或身份过期也不会阻止实验。混合模式仍对 `tokens` 层执行原有换算、校准文件身份检查及目标校验。
+
+服务启动时会简短记录跳过的层及模式，`capacity-validation.json` 的 `enforced_token_targets_by_tier` 分别标记 HBM/L1 是否执行 token 目标校验；全部跳过时 `enforced_token_targets=false`。实际容量观测、物理预算和布局一致性检查继续执行。普通实验不会自动运行 `calibrate_capacity.py` 或搜索容量；显式调用该入口仍可测量布局。`execution.compile_calibration` 的编译预热与上述规则独立，行为不变。HBM/L1 的 `mode` 均须填写，省略时仍报错。
+
 | 层 | 自动规划 | 按 tokens 配置 | 按物理容量配置 |
 |---|---|---|---|
 | HBM | hbm.mode=auto，使用 vllm.json 的 gpu_memory_utilization | hbm.mode=tokens，hbm.tokens；calculation.method=bytes_per_token 并指定 bytes_per_token，或 calibration | hbm.mode=physical，hbm.bytes |
@@ -288,7 +292,7 @@ python3 -B scripts/experiment_swe_n3379_performance.py \
   --set 'capacity.hbm.mode="auto"' --set server.gpu_memory_utilization=0.9
 ```
 
-auto 模式下，脚本省略 `--kv-cache-memory-bytes`，由 vLLM/对应 Ascend 后端规划容量。`hbm.tokens`、`hbm.bytes` 和 HBM 换算系数不生效；旧校准文件只有在 L1 使用校准换算时才会读取。无需删除其他模式的配置字段，默认模式仍为 `tokens`。
+auto 模式下，脚本省略 `--kv-cache-memory-bytes`，由 vLLM/对应 Ascend 后端规划容量。`hbm.tokens`、`hbm.bytes` 和 HBM 换算系数不生效；旧校准文件只有在 L1 使用校准换算时才会读取。无需删除其他模式的配置字段，随仓库提供的 HBM 配置仍使用 `tokens`。
 
 启动前计划中的 `kv_cache_memory_bytes` 和 `hbm_target_tokens` 为 `null`，表示尚未测得实际容量。启动后 `plan.json` 的 `capacity.observed_hbm`、`startup-workers.json` 和 `capacity-validation.json` 记录每个 worker 的实际 KV 字节数及 tokens，并继续检查张量/block 一致性和 L1 容量。自动分配出的实际容量不同的记录会在报告中分组统计，缺少有效容量观测的受管服务记录不计入有效结果。需要严格固定容量做对照时，应使用 `physical` 或校准后的 `tokens` 模式。
 
