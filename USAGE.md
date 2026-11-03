@@ -63,12 +63,36 @@ python3 -B scripts/prepare_environment.py --build
 
 Python 依赖和原生依赖源码需要分别准备。Python wheels 通过 `build.wheelhouse` 提供；fmt、spdlog、pybind11、zlib 的源码由 UCM 的 CMake 配置获取。原仓库中未跟踪或被忽略的 vendor 目录不会随 `git archive` 导出，具体条件见 [原生依赖源码](ENVIRONMENT.md#原生依赖源码)。vLLM、PyTorch、CUDA/CANN 等平台环境仍由目标容器提供。
 
-### 通过命令参数构建
+### 准备 Python wheels
 
-目标容器能够访问 UCM 声明的源码地址时，可从本地 wheelhouse 安装 Python 依赖，同时显式开启原生源码下载。以下示例假设 Python wheels 已放在本包的 `dependency-wheels/` 目录，版本与目标 Python、系统架构匹配；位置不同时修改 `UCM_WHEELHOUSE` 的值。该变量由使用者在当前 shell 中设置；其值作为配置路径传入，相对路径以主配置文件所在目录为基准，因此主配置位于 `config/` 时使用 `../dependency-wheels`。
+`build.install_dependencies=true` 只从已有的本地目录安装 Python 包，**不会下载 Python wheels，也不会自动准备 `dependency-wheels/`**。已准备好 wheels 时，继续使用它们的实际目录，无需重新下载；不要将已有的 `UCM_WHEELHOUSE` 改为示例目录。
+
+首次准备时，在目标容器中使用与 `paths.server_python` 相同的 Python 和系统架构下载。以下假设 `python3` 就是该解释器，否则将下载命令中的 `python3` 替换为对应路径。先导出所选 UCM 提交的源码和依赖清单，不执行构建或安装：
 
 ```bash
-export UCM_WHEELHOUSE="../dependency-wheels"
+python3 -B scripts/prepare_environment.py --set build.install_dependencies=false
+```
+
+将输出目录填入 `UCM_PREPARED_RUN`。如果已有构建失败目录且其中存在 `source/requirements-build.txt` 和 `source/requirements.txt`，可直接使用该目录，无需重新导出。确认它对应当前要构建的 UCM 提交。
+
+```bash
+UCM_PREPARED_RUN="runs/实际准备目录"
+export UCM_WHEELHOUSE="$PWD/dependency-wheels"
+
+python3 -m pip download --only-binary=:all: \
+  --dest "$UCM_WHEELHOUSE" \
+  -r "$UCM_PREPARED_RUN/source/requirements-build.txt" \
+  -r "$UCM_PREPARED_RUN/source/requirements.txt"
+```
+
+此命令需要可用的 Python 包索引，只下载包及其依赖，不安装到当前环境。目录由 pip 创建；仅执行 `mkdir` 得到空目录并不能完成准备。使用 `$PWD` 生成实际路径，使 pip 的下载位置与构建脚本读取的位置一致；配置中的相对路径以主配置文件目录为基准，而 pip 的相对路径以当前工作目录为基准。下载全部成功后，再执行构建。
+
+### 通过命令参数构建
+
+确认 `UCM_WHEELHOUSE` 已指向准备好的目录。该变量由使用者在当前 shell 中设置，不由脚本自动定义。目标容器能够访问 UCM 声明的源码地址时，可从本地 wheelhouse 安装 Python 依赖，同时显式开启原生源码下载：
+
+```bash
+: "${UCM_WHEELHOUSE:?请先准备 Python wheels 并设置其实际目录}"
 
 python3 -B scripts/prepare_environment.py --build \
   --set build.install_dependencies=true \
@@ -77,6 +101,8 @@ python3 -B scripts/prepare_environment.py --build \
 ```
 
 `--set` 只对本次运行生效，不修改配置文件。两个 CMake 选项需同时设置，显式值覆盖默认离线设置。若原配置中还有其他 `build.cmake_args`，请一并保留在命令的数组中，因为该覆盖会替换整个数组。Python 依赖仍从本地 wheelhouse 安装，不从 Python 包索引下载；原生源码按所选 UCM 提交声明的地址和版本获取。
+
+实际构建会在导出源码和创建 venv 前检查 wheelhouse，目录不存在、不可读或为空时直接报出配置路径并记录失败。目录检查不代替 pip 的依赖解析；如果目录有效但缺少所需版本或目标平台对应的包，需要按同一份 UCM 依赖清单补齐。`--build` 不会因为目录缺包而自动切换为联网安装。
 
 ### 将构建参数写入配置文件
 
@@ -472,7 +498,7 @@ HBM 与 L1 可以独立选择模式。默认组合是 **HBM 按 tokens 换算，
 |---|---|---|
 | `build.jobs` | `2` | UCM 构建并行度。按 CPU 和主存资源调整，不是设备卡数或请求并发。 |
 | `build.cmake_args` | `[]` | 额外 CMake 参数数组，追加在默认参数之后，同名 `-D` 设置以最后一个为准。默认离线；同时传入 `-DDOWNLOAD_DEPENDENCE=ON` 和 `-DFETCHCONTENT_FULLY_DISCONNECTED=OFF` 可显式启用原生依赖下载，见 [原生依赖源码](ENVIRONMENT.md#原生依赖源码)。 |
-| `build.wheelhouse` | `null` | 离线 Python 依赖包目录；启用 `install_dependencies` 时必须填写。 |
+| `build.wheelhouse` | `null` | 离线 Python 依赖包目录；启用 `install_dependencies` 时必须填写，实际构建前须可读且非空。首次下载见 [准备 Python wheels](#准备-python-wheels)。 |
 | `build.install_dependencies` | `false` | `false` 依赖基础 Python 已安装的包；`true` 在新建虚拟环境中从 wheelhouse 安装 UCM 的构建和运行依赖。 |
 | `build.image_label` | `quay.io/ascend/vllm-ascend:v0.30.0-a5` | 记录镜像名称的说明字段，不拉取镜像、不启动容器、不安装此版本，也不核验镜像 digest。 |
 

@@ -28,12 +28,13 @@ python3 -m pip install -r requirements.txt
 python3 -m pip install --no-index --find-links /离线wheels目录 -r requirements.txt
 ```
 
-UCM 的依赖由自己的 requirements 管理；开启安装时仍使用离线 wheelhouse：
+UCM 的依赖由自己的 requirements 管理；`build.install_dependencies=true` 仅从本地 wheelhouse 安装，不负责下载 Python 包。首次使用需按 [准备 Python wheels](USAGE.md#准备-python-wheels) 从所选提交的依赖清单下载；只创建目录并不能代替下载。已准备好的目录可以复用，将 `UCM_WHEELHOUSE` 设置为其实际路径后执行：
 
 ```bash
+: "${UCM_WHEELHOUSE:?请先准备 Python wheels 并设置其实际目录}"
 python3 -B scripts/prepare_environment.py --build \
   --set build.install_dependencies=true \
-  --set 'build.wheelhouse="/离线wheels目录"'
+  --set "build.wheelhouse=\"$UCM_WHEELHOUSE\""
 ```
 
 依赖安装默认关闭；缺少依赖时构建会报错，不会自动联网。其他 Python 版本或平台应先核对可用 wheel 与组件约束，再调整相应清单；不要把报告环境的版本固定项直接用于替换服务镜像的软件栈。
@@ -47,13 +48,14 @@ UCM 的原生构建需要 fmt、spdlog、pybind11、zlib 等源码。`pip instal
 目标容器能够访问所选 UCM 源码声明的 Git 地址时，可执行：
 
 ```bash
+: "${UCM_WHEELHOUSE:?请先准备 Python wheels 并设置其实际目录}"
 python3 -B scripts/prepare_environment.py --build \
   --set build.install_dependencies=true \
-  --set 'build.wheelhouse="../../dependency-wheels"' \
+  --set "build.wheelhouse=\"$UCM_WHEELHOUSE\"" \
   --set 'build.cmake_args=["-DDOWNLOAD_DEPENDENCE=ON","-DFETCHCONTENT_FULLY_DISCONNECTED=OFF"]'
 ```
 
-将 `build.wheelhouse` 替换为已准备的 Python wheels 目录；相对路径以主配置文件目录为基准。两个 CMake 参数需一起设置。`build.cmake_args` 按顺序追加在默认参数之后，因此显式值优先；若已有其他 CMake 参数，将它们一并保留在数组中。只生成计划时省略 `--build`，不会触发 CMake 下载。
+`UCM_WHEELHOUSE` 必须指向已准备的 Python wheels 目录；相对路径以主配置文件目录为基准。实际构建会提前拒绝不存在、不可读或为空的目录。两个 CMake 参数需一起设置。`build.cmake_args` 按顺序追加在默认参数之后，因此显式值优先；若已有其他 CMake 参数，将它们一并保留在数组中。只生成计划时省略 `--build`，不会触发 CMake 下载，也不要求 wheels 已下载；依赖安装开启时仍需提供计划使用的目录值。
 
 原生依赖的地址和版本由导出源码的 `dep-*.cmake` 决定，获取过程记录在该次 wheel 构建日志中；Python 依赖仍从本地 wheelhouse 安装。最终 CMake 参数见 `build-plan.json` 的 `environment_changes.BUNDLE_CMAKE_ARGS`。CANN、编译器及系统开发库仍由目标容器提供。
 

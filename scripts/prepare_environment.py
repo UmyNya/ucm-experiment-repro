@@ -184,6 +184,42 @@ def native_instrumentation(config, source, run):
             'event_clock': 'CLOCK_MONOTONIC nanoseconds', 'implementation': 'portable JSONL native recorder, no CUDA/NVTX dependency'}
 
 
+def validate_wheelhouse(config, *, check_directory=True):
+    """Reject unusable offline sources before exporting or compiling UCM.
+
+    Pip can report a missing distribution when its find-links directory is
+    invalid, obscuring the configuration error.
+
+    Args:
+        config: Loaded experiment configuration with resolved paths.
+        check_directory: Inspect the directory for an actual build. Plan-only
+            runs can export requirements before the wheels are downloaded.
+
+    Raises:
+        ValueError: Installation is enabled without a configured wheelhouse, or
+            a checked directory is unreadable, missing, or empty.
+    """
+    if not config['build']['install_dependencies']:
+        return
+    wheelhouse = config['build']['wheelhouse']
+    if not wheelhouse:
+        raise ValueError('Offline dependency installation requires build.wheelhouse; '
+                         'prepare Python wheels as described in USAGE.md')
+    if not check_directory:
+        return
+    try:
+        with os.scandir(wheelhouse) as entries:
+            empty = next(entries, None) is None
+    except OSError as error:
+        raise ValueError(f'Cannot read build.wheelhouse directory {wheelhouse}: {error.strerror}. '
+                         'Download Python wheels first or select their existing directory; '
+                         'relative paths use the main config directory. See USAGE.md') from error
+    if empty:
+        raise ValueError(f'build.wheelhouse directory is empty: {wheelhouse}. '
+                         'Download dependencies from the selected UCM requirements first; '
+                         'creating an empty directory is not sufficient. See USAGE.md')
+
+
 def build_environment(config, run):
     """Create an environment that can resolve private build tools.
 
@@ -221,6 +257,7 @@ def main():
     config = load(args.config, args.set)
     run = new_run(config, 'service', 'environment')
     try:
+        validate_wheelhouse(config, check_directory=args.build)
         source, provenance = export_source(config, run)
         adjustment = adapt_copy(source, run, provenance['exported_commit'], config['build']['jobs'])
         native = native_instrumentation(config, source, run)
@@ -235,8 +272,6 @@ def main():
         (run/'scratch/tmp').mkdir(parents=True)
         commands = [[config['paths']['server_python'], '-m', 'venv', '--system-site-packages', str(venv)]]
         if config['build']['install_dependencies']:
-            if not wheelhouse:
-                raise ValueError('Offline dependency installation requires build.wheelhouse')
             commands.append([python, '-m', 'pip', 'install', '--no-index', '--find-links', wheelhouse,
                              '-r', str(source/'requirements-build.txt'), '-r', str(source/'requirements.txt')])
         commands.append([python, '-m', 'pip', 'wheel', '--no-index', '--no-deps', '--no-build-isolation',
